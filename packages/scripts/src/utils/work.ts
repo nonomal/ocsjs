@@ -1,5 +1,5 @@
-import { OCSWorker, SimplifyWorkResult, WorkResult } from '@ocsjs/core';
-import { $ui, $message, MessageElement, Script, h } from 'easy-us';
+import { SimplifyWorkResult, WorkerEvents, WorkResult } from '@ocsjs/core';
+import { $ui, $message, MessageElement, Script, h, CommonEventEmitter, cors, $elements } from 'easy-us';
 import { CommonProject } from '../projects/common';
 import { CommonWorkOptions, workPreCheckMessage } from '.';
 
@@ -13,15 +13,15 @@ export function commonWork(
 	options: {
 		start_delay_seconds?: number;
 		enable_control_panel?: boolean;
-		workerProvider: (opts: CommonWorkOptions) => OCSWorker<any> | undefined;
+		workerProvider: (opts: CommonWorkOptions) => CommonEventEmitter<WorkerEvents> | undefined;
 		beforeRunning?: () => void | Promise<void>;
 		onRestart?: () => void | Promise<void>;
-		onWorkerCreated?: (worker: OCSWorker<any>) => void | Promise<void>;
+		onWorkerCreated?: (worker: CommonEventEmitter<WorkerEvents>) => void | Promise<void>;
 	}
 ) {
 	// 置顶当前脚本
 	CommonProject.scripts.render.methods.pin(script);
-	let worker: OCSWorker<any> | undefined;
+	let worker: CommonEventEmitter<WorkerEvents> | undefined;
 
 	/**
 	 * 是否已经按下了开始按钮
@@ -43,7 +43,10 @@ export function commonWork(
 			workerProvider: () => worker,
 			onStart: async () => {
 				startBtnPressed = true;
-				checkMessage?.remove();
+				if (checkMessage instanceof MessageElement) {
+					checkMessage.remove();
+				}
+				await closeAnswerWrapperEmptyWarning();
 				start();
 			},
 			onRestart: async () => {
@@ -96,9 +99,7 @@ export function commonWork(
 			script.panel?.body?.replaceChildren(
 				h('div', { style: { marginTop: '12px' } }, [
 					gotoSettingsBtnContainer,
-					...(options.enable_control_panel
-						? [globalControlPanel ? globalControlPanel : createWorkControlPanel().container]
-						: []),
+					...(options.enable_control_panel ? [globalControlPanel || createWorkControlPanel().container] : []),
 					workResultPanel()
 				])
 			);
@@ -145,7 +146,7 @@ export function commonWork(
  * 答题控制
  */
 export function createWorkerControl(options: {
-	workerProvider: () => OCSWorker<any> | undefined;
+	workerProvider: () => CommonEventEmitter<WorkerEvents> | undefined;
 	onStart: () => void;
 	onRestart: () => void;
 }) {
@@ -186,6 +187,15 @@ export function createWorkerControl(options: {
 export function optimizationElementWithImage(root: HTMLElement, clone_node: boolean = false): HTMLElement {
 	const clone = clone_node ? (root.cloneNode(true) as HTMLElement) : root;
 	for (const img of Array.from(clone.querySelectorAll('img'))) {
+		// 如果已经存在识别结果，则不处理
+		if (
+			Array.from(img.parentElement!.querySelectorAll('span')).some(
+				(e) => e.style.fontSize === '0px' && e.textContent?.includes(img.src)
+			)
+		) {
+			continue;
+		}
+
 		const src = document.createElement('span');
 		src.innerText = img.src;
 		// 隐藏图片，但不影响 innerText 的获取
@@ -218,12 +228,19 @@ export function simplifyWorkResult(
 	const res: SimplifyWorkResult[] = [];
 	let i = 0;
 	for (const wr of results) {
+		const ques =
+			titleTransform?.(wr.ctx?.elements.title || [], i) ||
+			wr.ctx?.elements.title
+				?.map((e) => e?.innerText.trim())
+				.filter(Boolean)
+				.join('<br>') ||
+			'';
 		res.push({
 			requested: wr.requested,
 			resolved: wr.resolved,
 			error: wr.error,
 			type: wr.ctx?.type,
-			question: titleTransform?.(wr.ctx?.elements.title || [], i) || wr.ctx?.elements.title?.join(',') || '',
+			question: ques,
 			finish: wr.result?.finish,
 			searchInfos:
 				wr.ctx?.searchInfos.map((sr) => ({
@@ -248,3 +265,26 @@ export function removeRedundantWords(str: string, words: string[]) {
 	}
 	return str;
 }
+
+let answererWrapperUnsetMessage: MessageElement | undefined;
+
+export const answerWrapperEmptyWarning = cors.defineTopFunction((duration: number) => {
+	const setting = h('button', { className: 'base-style-button-secondary' }, '通用-全局设置');
+	setting.onclick = () => {
+		CommonProject.scripts.render.methods.pin(CommonProject.scripts.settings);
+		setTimeout(() => {
+			$elements.root?.querySelector<HTMLElement>('[value="点击配置"]')?.click();
+		}, 500);
+	};
+
+	answererWrapperUnsetMessage?.remove();
+	answererWrapperUnsetMessage = $message.warn({
+		content: h('span', {}, ['你还没设置题库，无法自动答题，请切换到 ', setting, ' 页面进行配置。']),
+		duration: duration
+	});
+});
+
+export const closeAnswerWrapperEmptyWarning = cors.defineTopFunction(() => {
+	answererWrapperUnsetMessage?.remove();
+	answererWrapperUnsetMessage = undefined;
+});

@@ -3,15 +3,17 @@ import {
 	SimplifyWorkResult,
 	defaultAnswerWrapperHandler,
 	OCSWorker,
-	defaultQuestionResolve,
-	splitAnswer
+	createDefaultQuestionResolver,
+	splitAnswer,
+	QuestionTypes
 } from '@ocsjs/core';
 import { $gm, cors, $message, $$el, $modal, $el, Project, Script, $ui, h } from 'easy-us';
+import { optimizationElementWithImage, commonWork, simplifyWorkResult } from '../utils/work';
 import { playbackRate, restudy, volume } from '../utils/configs';
 import { CommonWorkOptions, playMedia } from '../utils';
 import { CommonProject } from './common';
-import { commonWork, simplifyWorkResult } from '../utils/work';
-import { $console } from './background';
+
+import { $console, BackgroundProject } from './background';
 import { waitForElement, waitForMedia } from '../utils/study';
 
 const state = {
@@ -759,7 +761,7 @@ async function watchMedia() {
 	});
 }
 
-function work({ answererWrappers, period, thread, answerSeparators, answerMatchMode }: CommonWorkOptions) {
+function work({ answererWrappers, period, thread, answerSeparators }: CommonWorkOptions) {
 	$message.info('开始作业');
 	CommonProject.scripts.workResults.methods.init();
 
@@ -819,7 +821,6 @@ function work({ answererWrappers, period, thread, answerSeparators, answerMatchM
 		},
 		thread: thread ?? 1,
 		answerSeparators: answerSeparators.split(',').map((s) => s.trim()),
-		answerMatchMode: answerMatchMode,
 		/** 默认搜题方法构造器 */
 		answerer: (elements, ctx) => {
 			const title = titleTransform(elements.title);
@@ -861,7 +862,7 @@ function work({ answererWrappers, period, thread, answerSeparators, answerMatchM
 					}
 				}
 			} else {
-				const resolver = defaultQuestionResolve(ctx)[type];
+				const resolver = createDefaultQuestionResolver(ctx)[type];
 				const res = await resolver(ctx.searchInfos, ctx.elements.options, (type, answer, option) => {
 					if (type === 'judgement' || type === 'single' || type === 'multiple') {
 						// 这里只用判断多选题是否选中，如果选中就不用再点击了，单选题是 radio，所以不用判断。
@@ -923,7 +924,7 @@ function work({ answererWrappers, period, thread, answerSeparators, answerMatchM
 
 	(async () => {
 		while (next && worker.isClose === false) {
-			await worker.doWork({ enable_debug: true });
+			await worker.doWork({ enable_debug: BackgroundProject.scripts.dev.cfg.enable_answerer_debug });
 			await $.sleep(1000);
 			next = getNextBtn();
 			if (next.style.display === 'none') {
@@ -943,7 +944,7 @@ function work({ answererWrappers, period, thread, answerSeparators, answerMatchM
 	return worker;
 }
 
-function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatchMode }: CommonWorkOptions) {
+function aiWork({ answererWrappers, period, thread, answerSeparators }: CommonWorkOptions) {
 	$message.info('开始作业');
 	CommonProject.scripts.workResults.methods.init();
 
@@ -951,10 +952,13 @@ function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatc
 
 	const titleTransform = (titles: (HTMLElement | undefined)[]) => {
 		return titles
-			.filter((t) => t?.innerText)
+			.filter((t) => t?.innerText || t?.querySelector('img'))
 			.map((t) => {
 				if (t) {
-					return t.innerText.trim();
+					const el = optimizationElementWithImage(t, true);
+					// 使用 textContent 而非 innerText，因为 innerText 受 CSS 影响，
+					// fontSize: 0px 的隐藏 span 中的图片 URL 不会被 innerText 获取
+					return (el.textContent || '').replace(/\s+/g, ' ').trim() || '';
 				}
 				return '';
 			})
@@ -979,7 +983,7 @@ function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatc
 				: 'single'
 			: options.some((o) => o.querySelector('[type="checkbox"]'))
 			? 'multiple'
-			: options.some((o) => o.querySelector('textarea'))
+			: options.some((o) => o.querySelector('textarea')) || options.some((o) => o.classList.contains('ivu-input'))
 			? 'completion'
 			: options.some((o) => o.querySelector('.fillblank_input input'))
 			? 'fill-blank'
@@ -990,11 +994,10 @@ function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatc
 		root: '.content-item',
 		elements: {
 			title: '.questions-content [class*=title-content]',
-			options: 'label[class*=group-item]'
+			options: 'label[class*=group-item],.ivu-input-wrapper input'
 		},
 		thread: thread ?? 1,
 		answerSeparators: answerSeparators.split(',').map((s) => s.trim()),
-		answerMatchMode: answerMatchMode,
 		/** 默认搜题方法构造器 */
 		answerer: (elements, ctx) => {
 			const title = titleTransform(elements.title);
@@ -1004,14 +1007,18 @@ function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatc
 					return defaultAnswerWrapperHandler(answererWrappers, {
 						type: getType(ctx.elements.options) || 'unknown',
 						title,
-						options: ctx.elements.options.map((o) => o.innerText).join('\n')
+						options: ctx.elements.options.map((o) => optimizationElementWithImage(o, true).innerText).join('\n')
 					});
 				});
 			} else {
 				throw new Error('题目为空，请查看题目是否为空，或者忽略此题');
 			}
 		},
+
 		work: {
+			type: (ctx) => {
+				return getType(ctx.elements.options) as QuestionTypes;
+			},
 			async handler(type, answer, option, ctx) {
 				if (type === 'judgement' || type === 'single' || type === 'multiple') {
 					// 这里只用判断多选题是否选中，如果选中就不用再点击了，单选题是 radio，所以不用判断。
@@ -1019,12 +1026,24 @@ function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatc
 						option?.click();
 					}
 				} else if (type === 'completion' && answer.trim()) {
-					// 尚未支持
+					if (option.tagName === 'INPUT') {
+						option.focus();
+						await $.sleep(100);
+						// @ts-ignore
+						option.value = answer.trim();
+						await $.sleep(100);
+						option.dispatchEvent(new Event('input', { bubbles: true }));
+						await $.sleep(100);
+						option.blur();
+						await $.sleep(100);
+					}
 				}
 			}
 		},
 		onElementSearched(elements, root) {
 			console.log('elements', elements);
+			// 对选项元素进行图片优化，使默认 resolver 的 innerText 匹配也能获取到图片链接
+			elements.options?.forEach((option) => optimizationElementWithImage(option));
 		},
 
 		/**
@@ -1058,7 +1077,7 @@ function aiWork({ answererWrappers, period, thread, answerSeparators, answerMatc
 
 	(async () => {
 		while (next && worker.isClose === false) {
-			await worker.doWork({ enable_debug: true });
+			await worker.doWork({ enable_debug: BackgroundProject.scripts.dev.cfg.enable_answerer_debug });
 			await $.sleep(1000);
 			next = getNextBtn();
 			if (next.getAttribute('disabled')) {

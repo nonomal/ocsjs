@@ -49,7 +49,7 @@ hr {
   -moz-appearance: none;
   -webkit-appearance: none;
   width: fit-content;
-  min-width: 36px;
+  min-width: 48px;
   height: 20px;
   border-radius: 100px;
   display: flex;
@@ -66,7 +66,7 @@ hr {
   background-color: #f7f7f78b;
 }
 .base-style-switch:checked::before {
-  transform: translate(100%, 0px);
+  transform: translate(24px, 0px);
 }
 .base-style-switch::before {
   background-color: #fff;
@@ -150,7 +150,7 @@ hr {
 .base-style-button-secondary:disabled:active {
   box-shadow: none;
 }
-container-element.close {
+container-element.hidden {
   display: none;
 }
 container-element.minimize {
@@ -495,7 +495,7 @@ script-panel-element + script-panel-element {
   -moz-appearance: none;
   -webkit-appearance: none;
   width: fit-content;
-  min-width: 36px;
+  min-width: 48px;
   height: 20px;
   border-radius: 100px;
   display: flex;
@@ -512,7 +512,7 @@ script-panel-element + script-panel-element {
   background-color: #f7f7f78b;
 }
 .configs .configs-body config-element .config-wrapper input[type='checkbox']:checked::before {
-  transform: translate(100%, 0px);
+  transform: translate(24px, 0px);
 }
 .configs .configs-body config-element .config-wrapper input[type='checkbox']::before {
   background-color: #fff;
@@ -836,6 +836,8 @@ search-infos-element .search-result {
 }
 search-infos-element .search-result .question {
   font-weight: bold;
+  max-height: 200px;
+  overflow: auto;
 }
 search-infos-element .search-result .answer {
   color: #7c7c7c;
@@ -851,10 +853,11 @@ search-infos-element .search-result .answer code + code {
   margin-left: 4px;
 }
 search-infos-element .search-result .search-result-answer-tag {
-  padding: 2px 4px;
+  padding: 2px 6px;
   border-radius: 2px;
   font-size: 12px;
   cursor: pointer;
+  margin-right: 6px;
 }
 search-infos-element .search-result .search-result-answer-tag + .search-result-answer-tag {
   margin-left: 4px;
@@ -939,6 +942,11 @@ search-infos-element .error {
   padding: 8px 12px;
   margin-bottom: 12px;
   line-height: 20px;
+  overflow: auto;
+}
+.search-info-title .title-content {
+  max-height: 200px;
+  overflow: auto;
 }
 .search-info-details {
   margin-left: 4px;
@@ -974,23 +982,6 @@ search-infos-element .error {
 }
 .console *::selection {
   background-color: #ffffff6b;
-}
-/* 设置滚动条的样式 */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-/* 滚动槽 */
-::-webkit-scrollbar-track {
-  background: #ffffffd8;
-  border-radius: 4px;
-  margin: 4px;
-}
-/* 滚动条滑块 */
-::-webkit-scrollbar-thumb {
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.253);
-  box-shadow: inset006pxrgba(0, 0, 0, 0.3);
 }
 .markdown {
   max-width: 400px;
@@ -1063,6 +1054,9 @@ search-infos-element .error {
 .space {
   display: inline-flex;
 }
+.config-details {
+  animation: fade-in 0.5s;
+}
 .config-details label {
   padding-left: 12px;
 }
@@ -1120,4 +1114,42 @@ modal-element {
   100% {
     opacity: 0;
   }
+}
+.checkbox-label {
+  display: inline-block !important;
+  position: relative;
+  cursor: pointer;
+  font-size: 16px;
+  color: #2c3e50;
+}
+/* 隐藏原始复选框 */
+.checkbox-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+/* 自定义按钮样式 */
+.checkbox-label::after {
+  content: '';
+  display: inline-block;
+  border-radius: 50%;
+  transition: all 0.1s ease;
+  position: relative;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+/* 向下箭头（未选中状态） */
+.checkbox-label::before {
+  content: '🔽';
+  position: absolute;
+  width: 0;
+  height: 0;
+  right: 8px;
+  transition: all 0.1s ease;
+  z-index: 2;
+}
+/* 向上箭头（选中状态） */
+.checked .checkbox-label::before {
+  content: '🔼';
 }

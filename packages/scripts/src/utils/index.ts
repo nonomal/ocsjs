@@ -1,6 +1,8 @@
-import { $, AnswerMatchMode, AnswererWrapper, WorkUploadType } from '@ocsjs/core';
+import { $, AnswererWrapper, WorkUploadType } from '@ocsjs/core';
 import { $ui, $message, $modal, MessageElement, h } from 'easy-us';
 import { $console } from '../projects/background';
+import { answerWrapperEmptyWarning } from './work';
+import { MessageAttrs } from 'easy-us/lib/interfaces/custom-window';
 
 export interface CommonWorkOptions {
 	period: number;
@@ -10,7 +12,6 @@ export interface CommonWorkOptions {
 	stopSecondWhenFinish: number;
 	redundanceWordsText: string;
 	answerSeparators: string;
-	answerMatchMode: AnswerMatchMode;
 }
 
 /** 创建答题预处理信息 */
@@ -32,10 +33,7 @@ export function workPreCheckMessage(
 
 	if (opts.answererWrappers.length === 0) {
 		onNoAnswererWrappers?.(opts);
-		return $message.warn({
-			content: '检测到题库配置为空，无法自动答题，请前往 通用-全局设置 页面进行配置。',
-			duration: 0
-		});
+		return answerWrapperEmptyWarning(0);
 	} else {
 		options.start_delay_seconds = options.start_delay_seconds ?? 5;
 		return $message.info({
@@ -193,3 +191,32 @@ export function createQuestionTitleExtra(question: string) {
 	space.style.textAlign = 'right';
 	return h('div', { style: { textAlign: 'right' } }, [space]);
 }
+
+function msg(type: keyof typeof $message, attrs: MessageAttrs) {
+	$message[type](attrs);
+	if (type === 'success') {
+		type = 'info';
+	}
+	let content = '';
+	if (typeof attrs === 'string') {
+		content = attrs;
+	} else {
+		if (attrs.content instanceof HTMLElement) {
+			content = attrs.content.innerText;
+		} else if (typeof attrs.content === 'string') {
+			content = attrs.content.toString();
+		}
+	}
+	$console[type](content);
+}
+
+export const $msg = {
+	/**  输出气泡消息以及日志记录  */
+	info: (attrs: MessageAttrs) => msg('info', attrs),
+	/**  输出气泡消息以及日志记录  */
+	warn: (attrs: MessageAttrs) => msg('warn', attrs),
+	/**  输出气泡消息以及日志记录  */
+	error: (attrs: MessageAttrs) => msg('error', attrs),
+	/**  输出气泡消息以及日志记录  */
+	success: (attrs: MessageAttrs) => msg('success', attrs)
+};

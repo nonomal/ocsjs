@@ -6,7 +6,7 @@ import {
 	$,
 	StringUtils,
 	request,
-	defaultQuestionResolve,
+	createDefaultQuestionResolver,
 	DefaultWork,
 	splitAnswer,
 	domSearch,
@@ -16,41 +16,23 @@ import {
 import { $modal, h, $store, MessageElement, Project, Script, $el, $gm, $$el, $ui, cors, $message } from 'easy-us';
 
 import { CommonProject } from './common';
-import { workNotes, volume, playbackRate } from '../utils/configs';
-import { commonWork, optimizationElementWithImage, removeRedundantWords, simplifyWorkResult } from '../utils/work';
+import { workNotes, volume, playbackRate, dropdownStyle } from '../utils/configs';
+import {
+	answerWrapperEmptyWarning,
+	commonWork,
+	optimizationElementWithImage,
+	removeRedundantWords,
+	simplifyWorkResult
+} from '../utils/work';
 import md5 from 'md5';
 // @ts-ignore
 import Typr from 'typr.js';
-import { $console } from './background';
+import { $console, BackgroundProject } from './background';
 import { CommonWorkOptions, playMedia } from '../utils';
-import { waitForMedia } from '../utils/study';
+import { waitForElement, waitForMedia } from '../utils/study';
 
-/**
- * 于 4.9.20 后更新，出现顶层套壳页面跨域 :
- * top : zjelib.cn <body>
- * iframe : mooc1.xxx.zjelib.cn/.../mycourse/studentstudy/...  <iframe src=....>
- * 导致top指向zjelib跨域无法访问，所以这里尝试寻找真正的top窗口对象，只有域名中包含 /mycourse/studentstudy 才是可操作的 top
- */
-let top = window.top;
-try {
-	let _self = $gm.unsafeWindow;
-	let _try_count = 10;
-	while (_self.parent !== undefined && _try_count > 0) {
-		if (_self.location.href.includes('/mycourse/studentstudy')) {
-			top = _self;
-			console.log('[ocsjs] top change to :' + top.location.href);
-			break;
-		} else {
-			_try_count--;
-			// @ts-ignore
-			_self = _self.parent;
-		}
-	}
-} catch (e) {
-	console.warn('[ocsjs] fail of find top');
-	console.warn(e);
-	top = window.top;
-}
+// @ts-ignore
+let top: Window = globalThis.top;
 
 try {
 	/**
@@ -131,10 +113,49 @@ export const CXProject = Project.create({
 		'cqie.cn',
 		'ccqmxx.com',
 		'jxgmxy.com',
+		'jnzyjsxy.cn',
 		// 超星学习通PPT，2025下半年更新的PTT图书新域名
-		'sslibrary.com'
+		'sslibrary.com',
+		// 26年新增官方域名
+		'xuexi365.com'
 	],
 	scripts: {
+		/**
+		 * 创建超星独立脚本防止污染其他脚本环境
+		 */
+		env: new Script({
+			name: '环境准备脚本',
+			matches: [['所有页面', /.*/]],
+			hideInPanel: true,
+			onstart() {
+				/**
+				 * 于 4.9.20 后更新，出现顶层套壳页面跨域 :
+				 * top : zjelib.cn <body>
+				 * iframe : mooc1.xxx.zjelib.cn/.../mycourse/studentstudy/...  <iframe src=....>
+				 * 导致top指向zjelib跨域无法访问，所以这里尝试寻找真正的top窗口对象，只有域名中包含 /mycourse/studentstudy 才是可操作的 top
+				 */
+				try {
+					let _self = self;
+					let _try_count = 10;
+					while (_self.parent !== undefined && _try_count > 0) {
+						if (_self.location.href.includes('/mycourse/studentstudy')) {
+							top = _self;
+							console.log('[ocsjs] top change to ' + top.location.href);
+							break;
+						} else {
+							_try_count--;
+							// @ts-ignore
+							_self = _self.parent;
+						}
+					}
+				} catch (e) {
+					console.warn('[ocsjs] fail of find top');
+					console.warn(e);
+					// @ts-ignore
+					top = globalThis.top;
+				}
+			}
+		}),
 		guide: new Script({
 			name: '💡 使用提示',
 			matches: [
@@ -151,7 +172,7 @@ export const CXProject = Project.create({
 				}
 			},
 			oncomplete() {
-				if (['chaoxing.com/mycourse', 'chaoxing.com/mooc2-ans/mycourse'].some((path) => location.href.includes(path))) {
+				if (['mycourse/studentstudy'].some((path) => location.href.includes(path))) {
 					$message.success('已进入学习页面，请等待自动运行...');
 					return;
 				}
@@ -200,9 +221,14 @@ export const CXProject = Project.create({
 					],
 					defaultValue: 'next' as 'next' | 'job' | 'manually'
 				},
+				autoJumpToUnFinishJob: {
+					label: '自动切换未完成章节',
+					attrs: { type: 'checkbox', title: '在自动学习前寻找未完成章节并跳转（积分课、智慧课程：推荐关闭）' },
+					defaultValue: true
+				},
 				restudy: {
 					label: '复习模式',
-					attrs: { title: '已经完成的视频继续学习，并从当前的章节往下开始学习', type: 'checkbox' },
+					attrs: { title: '已经完成的视频继续学习', type: 'checkbox' },
 					defaultValue: false
 				},
 				forceLearn: {
@@ -238,6 +264,7 @@ export const CXProject = Project.create({
 					defaultValue: true
 				},
 				enables: {
+					...dropdownStyle,
 					label: '高级设置',
 					attrs: { type: 'checkbox' },
 					defaultValue: false
@@ -305,16 +332,56 @@ export const CXProject = Project.create({
 						}
 					}) || 0;
 			},
-			async oncomplete() {
+			// 这里不使用 oncompelete ，如果某个资源一直在加载中，就会导致 oncomplete 一直无法触发，导致脚本无法运行，所以改为 onactive 只要匹配上就会触发
+			async onactive() {
 				/** iframe 跨域问题， 必须在 iframe 中执行 ， 所以脱离学习脚本运行。 */
 				if (/\/readsvr\/book\/mooc/.test(location.href)) {
-					$console.log('正在完成书籍/PPT...');
-					setTimeout(() => {
+					// 26年上半学期新阅读任务点，计时翻页，达到一定时间才能翻下一页，这里等待时间然后执行翻页完成任务。
+					if (document.querySelector('#reader')) {
 						// @ts-ignore
-						// eslint-disable-next-line no-undef
-						readweb.goto(epage);
-					}, 5000);
-
+						require(['reader'], (_reader) => {
+							waitForElement('.readerPager').then(() => {
+								setTimeout(async () => {
+									const jumper = document.querySelector<HTMLSelectElement>('#pagejump');
+									if (_reader?.goPage && jumper) {
+										// 等待时间
+										const timing = parseInt(new URL(location.href).searchParams.get('timing')?.toString() || '60') + 3;
+										console.log(timing);
+										await $.sleep(timing * 1000);
+										/**
+											 *  1:书名页
+												2:版权页
+												3:前言页
+												4:目录页
+												5:正文275页
+												7:封底页
+											*/
+										jumper.value = '5';
+										jumper.dispatchEvent(new Event('change'));
+										console.log('已跳转正文页');
+										await $.sleep(timing * 1000);
+										jumper.value = '7';
+										jumper.dispatchEvent(new Event('change'));
+										console.log('已跳转封底页');
+										await $.sleep(timing * 1000);
+										Array.from(document.querySelectorAll<HTMLElement>('.readerPager'))
+											.filter((el) => el.style.zIndex === '101')[0]
+											.click();
+										console.log('阅读完成');
+									}
+								}, 3000);
+							});
+						});
+					}
+					// 普通阅读任务点，id 是 #ReadWeb
+					else {
+						$console.log('正在完成书籍/PPT...');
+						setTimeout(() => {
+							// @ts-ignore
+							// eslint-disable-next-line no-undef
+							readweb.goto(epage);
+						}, 5000);
+					}
 					return;
 				}
 
@@ -362,12 +429,13 @@ export const CXProject = Project.create({
 			matches: [
 				['阅读页面', '/ztnodedetailcontroller/visitnodedetail'],
 				['课程目录', /chaoxing.com\/course\/\d+\.html/],
-				['课程目录', /chaoxing.com\/mooc-ans\/course\/\d+\.html/]
+				['课程目录', /chaoxing.com\/mooc-ans\/course\/\d+\.html/],
+				['积分课阅读课程目录', '/mooc-ans/zt/portal']
 			],
 			namespace: 'cx.new.auto-read',
 			configs: {
 				notes: {
-					defaultValue: $ui.notes(['阅读任务次日才会统计阅读时长']).outerHTML
+					defaultValue: $ui.notes(['点击任意章节开始自动阅读', '阅读任务次日才会统计阅读时长']).outerHTML
 				},
 				restartAfterFinish: {
 					label: '无限阅读',
@@ -376,6 +444,10 @@ export const CXProject = Project.create({
 				}
 			},
 			oncomplete() {
+				// 置顶
+				CommonProject.scripts.render.methods.pin(this);
+				$message.info('请手动点击任意章节开始自动阅读');
+
 				// 自动进入章节功能，如果不是阅读页面则自动进入
 				if (location.href.includes('/ztnodedetailcontroller/visitnodedetail') === false) {
 					startAtFirst();
@@ -446,8 +518,7 @@ export const CXProject = Project.create({
 				['', 'mycourse/studentcourse'],
 				['', 'work/getAllWork'],
 				['', 'work/doHomeWorkNew'],
-				['', 'exam/test\\?'],
-				['', 'mooc-ans/mycourse/studentstudy']
+				['', 'exam/test\\?']
 			],
 			hideInPanel: true,
 			async oncomplete() {
@@ -598,24 +669,21 @@ export const CXProject = Project.create({
 			namespace: 'cx.new.study-dispatcher',
 			hideInPanel: true,
 			async oncomplete() {
-				// 开始任务切换
-				const restudy = CXProject.scripts.study.cfg.restudy;
-
 				CommonProject.scripts.render.methods.pin(CXProject.scripts.study);
 
 				let chapters = await CXAnalyses.waitForChapterInfos();
 
-				if (!restudy) {
-					// 如果不是复习模式，则寻找需要运行的任务
-					const params = new URLSearchParams(window.location.href);
-					const mooc = params.get('mooc2');
-					/** 切换新版 */
-					if (mooc === null) {
-						params.set('mooc2', '1');
-						window.location.replace(decodeURIComponent(params.toString()));
-						return;
-					}
+				const params = new URLSearchParams(window.location.href);
+				const mooc = params.get('mooc2');
+				/** 切换新版 */
+				if (mooc === null) {
+					params.set('mooc2', '1');
+					window.location.replace(decodeURIComponent(params.toString()));
+					return;
+				}
 
+				// 寻找需要运行的任务
+				if (CXProject.scripts.study.cfg.autoJumpToUnFinishJob) {
 					// 过滤掉已完成的章节
 					chapters = chapters.filter((chapter) => chapter.unFinishCount !== 0);
 
@@ -625,23 +693,17 @@ export const CXProject = Project.create({
 						const params = new URLSearchParams(window.location.href);
 						const courseId = params.get('courseId');
 						const classId = params.get('clazzid');
-						setTimeout(() => {
-							//  进入需要进行的章节，并且当前章节未被选中
-							if ($$el(`.posCatalog_active[id="cur${chapters[0].chapterId}"]`).length === 0) {
-								$gm.unsafeWindow.getTeacherAjax(courseId, classId, chapters[0].chapterId);
-								// 自动滚动
-								setTimeout(() => {
-									CXAnalyses.scrollToActiveChapter();
-								}, 1000);
-							}
-						}, 1000);
+						//  进入需要进行的章节，并且当前章节未被选中
+						if ($$el(`.posCatalog_active[id="cur${chapters[0].chapterId}"]`).length === 0) {
+							$gm.unsafeWindow.getTeacherAjax(courseId, classId, chapters[0].chapterId);
+						}
+						await $.sleep(1000);
 					}
-				} else {
-					// 自动滚动
-					setTimeout(() => {
-						CXAnalyses.scrollToActiveChapter();
-					}, 1000);
 				}
+
+				// 自动滚动
+				await $.sleep(1000);
+				CXAnalyses.scrollToActiveChapter();
 			}
 		}),
 		cxSecretFontRecognize: new Script({
@@ -684,7 +746,6 @@ function workOrExam(
 		thread,
 		redundanceWordsText,
 		answerSeparators,
-		answerMatchMode,
 		preview_mode
 	}: CommonWorkOptions & {
 		// 整卷预览模式
@@ -701,40 +762,55 @@ function workOrExam(
 
 	// 处理作业和考试题目的方法
 	const workOrExamQuestionTitleTransform = (titles: (HTMLElement | undefined)[]) => {
+		// 是否为多个小题的题目
+		const is_multiple_question = titles.length > 1;
 		const optimizationTitle = titles
-			.map((titleElement) => {
-				if (titleElement) {
-					const titleCloneEl = titleElement.cloneNode(true) as HTMLElement;
+			.map((el, i) => {
+				if (el) {
+					const titleCloneEl = el.cloneNode(true) as HTMLElement;
 					const childNodes = titleCloneEl.childNodes;
-					// 删除序号
-					childNodes[0].remove();
-					// 删除题型
-					childNodes[0].remove();
+					// 一般多小题题目只有第一个 title 存在题型文本
+					if (i === 0) {
+						// 删除序号
+						childNodes[0]?.remove();
+						// 删除题型
+						childNodes[0]?.remove();
+					}
 					// 显示图片链接在题目中
 					return optimizationElementWithImage(titleCloneEl, true).innerText;
 				}
 				return '';
 			})
-			.join(',');
+			.join('\n');
 
 		return removeRedundantWords(
-			StringUtils.of(optimizationTitle).nowrap(' ').nospace().toString().trim(),
+			StringUtils.of(optimizationTitle)
+				.nowrap(is_multiple_question ? '\n' : ' ')
+				.nospace()
+				.toString()
+				.trim(),
 			redundanceWordsText.split('\n')
 		);
 	};
 
+	// 这里跟章节测试的连线题不一样，章节测试是新版连线题
 	/** 新建答题器 */
 	const worker = new OCSWorker({
 		root: '.questionLi',
 		elements: {
-			title: [
-				/** 题目标题 */
-				(root) => $el('h3', root) as HTMLElement
-				// /** 连线题第一组 */
-				// (root) => $el('.line_wid_half.fl', root),
-				// /** 连线题第二组 */
-				// (root) => $el('.line_wid_half.fr', root)
-			],
+			title: (root) =>
+				$$el(
+					// 非预览模式的样式跟正常的不一样
+					!preview_mode
+						? ['.splitS-left .mark_name', '.line_wid_half.fl,.line_wid_half.fr'].join(',')
+						: [
+								':scope > h3',
+								':scope > div:not(.stem_answer,.mark_answer)',
+								':scope > p',
+								'.line_wid_half.fl,.line_wid_half.fr'
+						  ].join(','),
+					root
+				).filter((e) => !!e.textContent?.trim()),
 			options: '.answerBg .answer_p, .textDIV, .eidtDiv',
 			type: type === 'exam' ? 'input[name^="type"]' : 'input[id^="answertype"]',
 			lineAnswerInput: '.line_answer input[name^=answer]',
@@ -746,7 +822,6 @@ function workOrExam(
 		},
 		thread: thread ?? 1,
 		answerSeparators: answerSeparators.split(',').map((s) => s.trim()),
-		answerMatchMode: answerMatchMode,
 		/** 默认搜题方法构造器 */
 		answerer: (elements, ctx) => {
 			if (elements.title) {
@@ -754,13 +829,14 @@ function workOrExam(
 				const title = workOrExamQuestionTitleTransform(elements.title);
 				if (title) {
 					const typeInput = elements.type[0] as HTMLInputElement;
+					const type = (typeInput ? getQuestionType(parseInt(typeInput.value)) : undefined) || 'unknown';
 					return CommonProject.scripts.apps.methods.searchAnswerInCaches(title, async () => {
 						await $.sleep((period ?? 3) * 1000);
 						return defaultAnswerWrapperHandler(answererWrappers, {
-							type: (typeInput ? getQuestionType(parseInt(typeInput.value)) : undefined) || 'unknown',
+							type,
 							title,
 							options:
-								ctx.type === 'completion'
+								type === 'completion'
 									? ''
 									: ctx.elements.options.map((o) => optimizationElementWithImage(o, true).innerText).join('\n')
 						});
@@ -775,11 +851,15 @@ function workOrExam(
 
 		work: async (ctx) => {
 			const { elements, searchInfos } = ctx;
-			const typeInput = elements.type[0] as HTMLInputElement;
-			const type = getQuestionType(parseInt(typeInput.value));
+
+			// 在非预览模式下会出现多个干扰项 type，这里提取正确的
+
+			const type = getQuestionType(
+				parseInt(elements.type.find((t) => t.getAttribute('name')?.match(/type\d+/))?.getAttribute('value') || '-1')
+			);
 
 			if (type && (type === 'completion' || type === 'multiple' || type === 'judgement' || type === 'single')) {
-				const resolver = defaultQuestionResolve(ctx)[type];
+				const resolver = createDefaultQuestionResolver(ctx)[type];
 				return await resolver(
 					searchInfos,
 					elements.options.map((option) => optimizationElementWithImage(option)),
@@ -815,7 +895,11 @@ function workOrExam(
 					if (ans.length === 1) {
 						ans = splitAnswer(ans[0]);
 					}
-					if (ans.filter(Boolean).length !== 0 && elements.lineAnswerInput) {
+					if (
+						ans.filter(Boolean).length !== 0 &&
+						elements.lineAnswerInput &&
+						ans.filter(Boolean).length === elements.lineSelectBox.length
+					) {
 						//  选择答案
 						for (let index = 0; index < elements.lineSelectBox.length; index++) {
 							const box = elements.lineSelectBox[index];
@@ -885,8 +969,9 @@ function workOrExam(
 
 		(async () => {
 			while (next && worker.isClose === false) {
-				await worker.doWork({ enable_debug: true });
-				await $.sleep(1000);
+				await worker.doWork({ enable_debug: BackgroundProject.scripts.dev.cfg.enable_answerer_debug });
+				$message.info({ content: '已完成，即将下一题', duration: 0 });
+				await $.sleep(3000);
 				next = getNextBtn();
 				next?.click();
 				await $.sleep(1000);
@@ -1212,10 +1297,12 @@ export async function study(
 
 	let attachmentCount: number = $gm.unsafeWindow.attachments?.length || 0;
 
+	const wait_timeout = 3 + attachmentCount * 2;
+
 	/** 考虑到网速级慢的同学，所以10秒后如果还没有任务点才停止 */
 	setTimeout(() => {
 		searching = false;
-	}, 10 * 1000);
+	}, Math.min(wait_timeout, 10) * 1000);
 
 	/**
 	 * 递归运行任务点，一旦有新的任务点被检测到直接开始
@@ -1258,7 +1345,8 @@ export async function study(
 		if (CXAnalyses.isInFinalTab()) {
 			if (await CXAnalyses.isStuckInBreakingMode()) {
 				return $modal.alert({
-					content: '检测到此章节重复进入, 为了避免无限重复, 请自行手动完成后手动点击下一章, 或者刷新重试。'
+					content:
+						'检测到当前课程为闯关模式（有小旗帜图标）, 但是已经重复进入多次，应该是章节测试没有完成，或者其他情况导致，请手动完成章节测试，然后手动点击下一章。'
 				});
 			}
 		}
@@ -1330,16 +1418,9 @@ export async function study(
 			if (curChapterId && curCourseId && curClazzId) {
 				// @ts-ignore
 				top._preChapterId = curChapterId.value;
-
-				const elements = CXAnalyses.getChapterInfos()
-					.map((e) => e.element.parentElement as HTMLElement)
-					.filter(Boolean);
-				const index = elements.findIndex((el) => el.classList.contains('posCatalog_active'));
-				// 如果有下一个，则滚动到那个位置
-				const next_item = elements[index + 1];
-				if (next_item) {
-					next_item.scrollIntoView({ behavior: 'smooth', block: 'center' });
-				}
+				CXAnalyses.scrollToActiveChapter();
+				// 等待跳转动画完成
+				await $.sleep(200);
 
 				/**
 				 * count, chapterId, courseId, clazzid, knowledgestr, checkType
@@ -1406,7 +1487,8 @@ function searchJob(
 				chapterTest: '.TiMu',
 				read: '#img.imglook',
 				pptWithAudio: '.swiper-container',
-				hyperlink: '#hyperlink'
+				hyperlink: '#hyperlink',
+				timereader: 'iframe[name="bookifame"][src*="timing"]'
 			},
 			root.contentWindow!.document
 		);
@@ -1415,9 +1497,9 @@ function searchJob(
 	const search = (root: HTMLIFrameElement): Job | undefined => {
 		const win = root.contentWindow;
 
-		const { videojs, read, chapterTest, hyperlink, pptWithAudio } = searchJobElement(root);
+		const { videojs, read, chapterTest, hyperlink, pptWithAudio, timereader } = searchJobElement(root);
 
-		if (win && (videojs || read || chapterTest || hyperlink || pptWithAudio)) {
+		if (win && (videojs || read || chapterTest || hyperlink || pptWithAudio || timereader)) {
 			// 获取任务点数据字符串
 			const frame_data_str =
 				win.frameElement?.getAttribute('data') ||
@@ -1497,13 +1579,16 @@ function searchJob(
 								// / 强制学习
 								(work_type === 'not-job' && CommonProject.scripts.settings.cfg['work-when-no-job'])
 							) {
-								func = () => {
-									const msg = `开始答题 : ` + jobName;
-									$message.info({ content: msg });
-									$console.log(msg);
-
-									return JobRunner.chapter(root, opts.workOptions);
-								};
+								if (opts.workOptions.answererWrappers === undefined || opts.workOptions.answererWrappers.length === 0) {
+									answerWrapperEmptyWarning(0);
+								} else {
+									func = () => {
+										const msg = `开始答题 : ` + jobName;
+										$message.info({ content: msg });
+										$console.log(msg);
+										return JobRunner.chapter(root, opts.workOptions);
+									};
+								}
 							}
 							if (work_type === 'not-job' && CommonProject.scripts.settings.cfg['work-when-no-job'] === false) {
 								const msg = `当前作业 ${jobName} 不是任务点，但待完成，如需开启自动答题请前往：通用-全局设置，开启强制答题。`;
@@ -1512,7 +1597,7 @@ function searchJob(
 							}
 						}
 					}
-				} else if (read || pptWithAudio) {
+				} else if (read || pptWithAudio || timereader) {
 					if (!CXProject.scripts.study.cfg.enablePPT) {
 						const msg = `PPT/书籍阅读功能已被关闭（在上方菜单栏，超星学习通-课程学习中开启）。${jobName} 即将跳过`;
 						$message.warn({ content: msg, duration: 10 });
@@ -1525,6 +1610,8 @@ function searchJob(
 								$console.log(msg);
 								if (read) {
 									return JobRunner.read(win);
+								} else if (timereader) {
+									return JobRunner.timereader(timereader as HTMLIFrameElement);
 								} else {
 									return JobRunner.readPPTWithAudio(win);
 								}
@@ -1653,7 +1740,12 @@ const JobRunner = {
 		return new Promise<void>((resolve, reject) => {
 			// 检测视频
 			const reloadInterval = setInterval(() => {
-				if (['视频文件损坏', '网络错误导致视频下载中途失败'].some((s) => doc.documentElement.innerText.includes(s))) {
+				const errorDiv = doc.querySelector<HTMLElement>('.vjs-modal-dialog-content');
+				if (
+					['视频文件损坏', '网络错误导致视频下载中途失败', '视频因格式不支持', '网络的问题无法加载'].some((s) =>
+						errorDiv?.innerText.includes(s)
+					)
+				) {
 					$console.error('检测到视频加载失败，即将跳过视频。');
 					$message.error('检测到视频加载失败，即将跳过视频。');
 					setTimeout(resolve, 3000);
@@ -1705,6 +1797,22 @@ const JobRunner = {
 		await $.sleep(3000);
 	},
 	/**
+	 * 时间阅读
+	 */
+	async timereader(iframe: HTMLIFrameElement) {
+		const src = iframe.getAttribute('src')?.toString() || '';
+		const timing = src ? parseInt(new URL(src).searchParams.get('timing')?.toString() || '60') : 60;
+		$message.info({
+			content: `正在学习长时阅读任务，请稍等，不要切换..（预计${(timing + 3) * 3}秒）`,
+			duration: (timing + 3) * 3
+		});
+		// 这里依靠 onactive 第一个跨域处理程序，等待处理后继续即可
+		// 一共有三步，第一步等待timing，然后切换正文页，然后是封底页，最后点击一次PPT文档切换界面，即可完成任务
+		await $.sleep((timing + 3) * 3 * 1000);
+		$message.success('长时阅读任务完成！');
+		await $.sleep(5000);
+	},
+	/**
 	 * 章节测验
 	 */
 	async chapter(
@@ -1716,8 +1824,7 @@ const JobRunner = {
 			thread,
 			stopSecondWhenFinish,
 			redundanceWordsText,
-			answerSeparators,
-			answerMatchMode
+			answerSeparators
 		}: CommonWorkOptions
 	) {
 		if (answererWrappers === undefined || answererWrappers.length === 0) {
@@ -1759,7 +1866,13 @@ const JobRunner = {
 		const worker = new OCSWorker({
 			root: TiMu,
 			elements: {
-				title: '.Zy_TItle .clearfix',
+				title: [
+					(root) => $el('.Zy_TItle .clearfix', root),
+					// /** 连线题第一组 */
+					(root) => $el('.firstUlList', root),
+					// /** 连线题第二组 */
+					(root) => $el('.secondUlList', root)
+				],
 				/**
 				 * 兼容各种选项
 				 *
@@ -1769,25 +1882,24 @@ const JobRunner = {
 				 */
 				options: 'ul li .after,ul li textarea,ul textarea,ul li label:not(.before)',
 				type: 'input[id^="answertype"]',
-				lineAnswerInput: '.line_answer input[name^=answer]',
-				lineSelectBox: '.line_answer_ct .selectBox '
+				lineSelectBox: '.thirdUlList .dept_select'
 			},
 			thread: thread ?? 1,
 			answerSeparators: answerSeparators.split(',').map((s) => s.trim()),
-			answerMatchMode: answerMatchMode,
 			/** 默认搜题方法构造器 */
 			answerer: (elements, ctx) => {
 				const title = chapterTestTaskQuestionTitleTransform(elements.title);
 				if (title) {
 					const typeInput = elements.type[0] as HTMLInputElement;
+					const type = (typeInput ? getQuestionType(parseInt(typeInput.value)) : undefined) || 'unknown';
 
 					return CommonProject.scripts.apps.methods.searchAnswerInCaches(title, async () => {
 						await $.sleep((period ?? 3) * 1000);
 						return defaultAnswerWrapperHandler(answererWrappers, {
-							type: (typeInput ? getQuestionType(parseInt(typeInput.value)) : undefined) || 'unknown',
+							type,
 							title,
 							options:
-								ctx.type === 'completion'
+								type === 'completion'
 									? ''
 									: ctx.elements.options.map((o) => optimizationElementWithImage(o, true).innerText).join('\n')
 						});
@@ -1803,7 +1915,7 @@ const JobRunner = {
 				const type = typeInput ? getQuestionType(parseInt(typeInput.value)) : undefined;
 
 				if (type && (type === 'completion' || type === 'multiple' || type === 'judgement' || type === 'single')) {
-					const resolver = defaultQuestionResolve(ctx)[type];
+					const resolver = createDefaultQuestionResolver(ctx)[type];
 
 					const handler: DefaultWork<any>['handler'] = (type, answer, option, ctx) => {
 						if (type === 'judgement' || type === 'single' || type === 'multiple') {
@@ -1841,22 +1953,31 @@ const JobRunner = {
 				}
 				// 连线题自定义处理
 				else if (type && type === 'line') {
-					for (const answers of searchInfos.map((info) => info.results.map((res) => res.answer))) {
-						let ans = answers;
-						if (ans.length === 1) {
-							ans = splitAnswer(ans[0]);
+					const select = (el: HTMLElement, opt_val: string) => {
+						const selected = el.querySelector(`option[selected]`);
+						const opt = el.querySelector(`option[value="${opt_val}"]`);
+						selected?.removeAttribute('selected');
+						if (opt) {
+							opt.setAttribute('selected', '');
 						}
-						if (ans.filter(Boolean).length !== 0 && elements.lineAnswerInput) {
-							//  选择答案
-							for (let index = 0; index < elements.lineSelectBox.length; index++) {
-								const box = elements.lineSelectBox[index];
-								if (ans[index]) {
-									$el(`li[data=${ans[index]}] a`, box)?.click();
-									await $.sleep(200);
-								}
-							}
+					};
 
-							return { finish: true };
+					for (const answers of searchInfos.map((info) => info.results.map((res) => res.answer))) {
+						for (const ans of answers) {
+							const splited_ans = splitAnswer(ans);
+							if (splited_ans.length !== 0 && elements.lineSelectBox.length === splited_ans.length) {
+								//  选择答案
+								for (let index = 0; index < elements.lineSelectBox.length; index++) {
+									const box = elements.lineSelectBox[index];
+									if (splited_ans[index]) {
+										select(box, splited_ans[index]);
+										const text = box.parentElement?.querySelector('.chosen-single span');
+										if (text) text.textContent = splited_ans[index];
+										await $.sleep(200);
+									}
+								}
+								return { finish: true };
+							}
 						}
 					}
 
@@ -1938,6 +2059,12 @@ const JobRunner = {
 						else if (opt === 'True') {
 							option.textContent = '√';
 						} else if (opt === 'False') {
+							option.textContent = 'x';
+						}
+						// 支持香港地区的繁体字
+						else if (opt === '對') {
+							option.textContent = '√';
+						} else if (opt === '錯') {
 							option.textContent = 'x';
 						} else {
 							const ri = option.querySelector('.ri');
@@ -2172,30 +2299,19 @@ function waitForFaceRecognition() {
 	});
 }
 
-function answerWrapperEmptyWarning(duration: number) {
-	const setting = h('button', { className: 'base-style-button-secondary' }, '通用-全局设置');
-	setting.onclick = () => CommonProject.scripts.render.methods.pin(CommonProject.scripts.settings);
-	if (state.study.answererWrapperUnsetMessage === undefined) {
-		state.study.answererWrapperUnsetMessage = $message.warn({
-			content: h('span', {}, ['检测到未设置题库配置，将无法自动答题，请切换到 ', setting, ' 页面进行配置。']),
-			duration: duration
-		});
-	}
-}
-
 /**
  * 答题程序位于其他 iframe 中，而 methods.pin 等 是依赖于 setTab 方法的，所以需要重新定义一个顶层函数来调用 pin 方法
  * 跨域调用
  */
 
 const CORSUtils = {
-	pinWorkPanel: cors.defineTopFunction('cx.pin.work', () => {
+	pinWorkPanel: cors.defineTopFunction(() => {
 		CommonProject.scripts.render.methods.pin(CommonProject.scripts.workResults);
 	}),
-	panelNormal: cors.defineTopFunction('cx.panel.normal', () => {
+	panelNormal: cors.defineTopFunction(() => {
 		CommonProject.scripts.render.methods.normal();
 	}),
-	panelMinimize: cors.defineTopFunction('cx.panel.minimize', () => {
+	panelMinimize: cors.defineTopFunction(() => {
 		CommonProject.scripts.render.methods.minimize();
 	})
 };

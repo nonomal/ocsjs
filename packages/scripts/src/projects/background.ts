@@ -16,7 +16,7 @@ import {
 import semver_gt from 'semver/functions/gt';
 import semver_valid from 'semver/functions/valid';
 import { CommonProject } from './common';
-import { CXProject, definedProjects, ICourseProject, IcveMoocProject, ZHSProject, ZJYProject } from '..';
+import { CXProject, definedProjects, ICourseProject, IcveMoocProject, YKTProject, ZHSProject, ZJYProject } from '..';
 import { RenderScript } from '../render';
 import { SearchInfosElement } from '../elements/search.infos';
 import { $render } from '../utils/render';
@@ -508,6 +508,11 @@ export const BackgroundProject = Project.create({
 					defaultValue: true,
 					label: '软件辅助点击时显示鼠标位置',
 					attrs: { type: 'checkbox' }
+				},
+				enable_answerer_debug: {
+					defaultValue: true,
+					label: '开启答题日志输出',
+					attrs: { type: 'checkbox' }
 				}
 			},
 			methods() {
@@ -920,6 +925,7 @@ export const BackgroundProject = Project.create({
 				const currentStudyScript = [
 					[CXProject.scripts.studyDispatcher, CXProject.scripts.study],
 					CXProject.scripts.work,
+					CXProject.scripts.autoRead,
 					ZHSProject.scripts['gxk-study'],
 					ZHSProject.scripts['xnk-study'],
 					ZHSProject.scripts.hike,
@@ -930,13 +936,16 @@ export const BackgroundProject = Project.create({
 					ZHSProject.scripts['xnk-work'],
 					ZHSProject.scripts['hike-work'],
 					ZHSProject.scripts['smart-work'],
+					ZHSProject.scripts['smart-exam'],
 					ZHSProject.scripts['xnk-work'],
 					[ICourseProject.scripts.dispatcher, ICourseProject.scripts.study],
 					ICourseProject.scripts.work,
 					[ZJYProject.scripts.dispatcher, ZJYProject.scripts.study],
 					ZJYProject.scripts.work,
 					IcveMoocProject.scripts.study,
-					IcveMoocProject.scripts.work
+					IcveMoocProject.scripts.work,
+					YKTProject.scripts.ai,
+					YKTProject.scripts.v2_study
 				]
 					.map((m) => {
 						const url = window.location.href;

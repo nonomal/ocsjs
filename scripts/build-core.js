@@ -4,8 +4,9 @@ const { series } = require('gulp');
 const del = require('del');
 const util = require('util');
 const { version } = require('../package.json');
+/** @type {(...args: any[])=> Promise<void>} */
 const execOut = util.promisify(require('./utils').execOut);
-const { createUserScript } = require('../packages/utils');
+const { createUserScript, createMetaFile } = require('../packages/utils');
 const path = require('path');
 const dotenv = require('dotenv');
 const fs = require('fs');
@@ -20,18 +21,18 @@ function cleanOutput() {
 	return del([distPath, '../lib'], { force: true });
 }
 
+async function testResolver() {
+	await execOut('tsx ../tests/resolver.test.ts');
+}
+
 async function buildPackages() {
-	// @ts-ignore
 	await execOut('tsc', { cwd: '../packages/core' });
-	// @ts-ignore
 	await execOut('vite build', { cwd: '../packages/core' });
-	// @ts-ignore
 	await execOut('tsc', { cwd: '../packages/scripts' });
-	// @ts-ignore
 	await execOut('vite build', { cwd: '../packages/scripts' });
 }
 
-async function createUserJs(cb) {
+async function createUserJs() {
 	/** 模拟浏览器环境 */
 	require('browser-env')();
 
@@ -44,8 +45,8 @@ async function createUserJs(cb) {
 
 	/** @return {import('../packages/utils').CreateOptions} */
 	const createOptions = () => {
-		const { CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject } = ocs;
-		const projectList = [CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject]
+		const { CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject } = ocs;
+		const projectList = [CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject]
 			.map((s) => `【${s.name}】`)
 			.join(' ');
 
@@ -84,7 +85,7 @@ async function createUserJs(cb) {
 				homepage: 'https://docs.ocsjs.com',
 				source: 'https://github.com/ocsjs/ocsjs',
 				icon: 'https://cdn.ocsjs.com/logo.png',
-				connect: ['enncy.cn', 'icodef.com', 'ocsjs.com', 'localhost', '127.0.0.1'],
+				connect: ['enncy.cn', 'icodef.com', 'ocsjs.com', 'zaizhexue.top', 'localhost', '127.0.0.1'],
 				match: matchMetadata,
 				grant: [
 					'GM_info',
@@ -114,14 +115,16 @@ async function createUserJs(cb) {
 	const officialOpts = createOptions();
 	console.log('CreateUserScript: ', officialOpts.metadata.name, officialOpts.dist);
 	await createUserScript(officialOpts);
+	console.log('createMetaFile: ', path.join(distResolvedPath, 'ocs.meta.js'));
+	await createMetaFile({ dist: officialOpts.dist, metaDist: path.join(distResolvedPath, 'ocs.meta.js') });
 
 	/** 创建调试脚本 */
 	const devOpts = createOptions();
 	devOpts.parseRequire = false;
 	devOpts.parseResource = false;
 	devOpts.metadata.name = devOpts.metadata.name + '(dev)';
-	devOpts.metadata.require = ['file://' + path.join(distResolvedPath, 'index.js')];
-	devOpts.metadata.resource = [`STYLE file://${path.join(__dirname, '../packages/scripts/assets/css/style.css')}`];
+	devOpts.metadata.require = ['file:///' + path.join(distResolvedPath, 'index.js')];
+	devOpts.metadata.resource = [`STYLE file:///${path.join(__dirname, '../packages/scripts/assets/css/style.css')}`];
 	devOpts.entry = path.join(__dirname, '../packages/scripts/entry.dev.js');
 	devOpts.dist = path.join(distResolvedPath, 'ocs.dev.user.js');
 	/** 导出样式文件 */
@@ -145,4 +148,4 @@ async function createUserJs(cb) {
 	await createUserScript(commonOpts);
 }
 
-exports.default = series(cleanOutput, buildPackages, createUserJs);
+exports.default = series(cleanOutput, testResolver, buildPackages, createUserJs);

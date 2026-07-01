@@ -76,6 +76,7 @@ export interface RemotePage {
 	dblclick: Page['dblclick'];
 	bringToFront: Page['bringToFront'];
 	dragAndDrop: Page['dragAndDrop'];
+	inputValue: Page['inputValue'];
 	fill: Page['fill'];
 	focus: Page['focus'];
 	hover: Page['hover'];
@@ -98,6 +99,14 @@ export interface RemotePage {
 		url: string;
 	}>;
 	waitForSelector(...args: Parameters<Page['waitForSelector']>): Promise<void>;
+	['keyboard.type']: Page['keyboard']['type'];
+	['keyboard.press']: Page['keyboard']['press'];
+	['mouse.wheel']: Page['mouse']['wheel'];
+	['mouse.click']: Page['mouse']['click'];
+	['mouse.dblclick']: Page['mouse']['dblclick'];
+	['mouse.down']: Page['mouse']['down'];
+	['mouse.up']: Page['mouse']['up'];
+	['mouse.move']: Page['mouse']['move'];
 }
 
 const ListOfActions = [
@@ -117,7 +126,33 @@ const ListOfActions = [
 	'reload',
 	'waitForRequest',
 	'waitForResponse',
-	'waitForSelector'
+	'waitForSelector',
+	'keyboard.type',
+	'keyboard.press',
+	'mouse.wheel',
+	'mouse.click',
+	'mouse.dblclick',
+	'mouse.down',
+	'mouse.up',
+	'mouse.move'
+];
+
+const mouseIdleRequireActions = [
+	'click',
+	'dblclick',
+	'dragAndDrop',
+	'fill',
+	'hover',
+	'tap',
+	'press',
+	'keyboard.type',
+	'keyboard.press',
+	'mouse.wheel',
+	'mouse.click',
+	'mouse.dblclick',
+	'mouse.down',
+	'mouse.up',
+	'mouse.move'
 ];
 
 export class RemotePlaywright {
@@ -163,6 +198,11 @@ export class RemotePlaywright {
 		for (const property of ListOfActions) {
 			Reflect.set(page, property, async (...args: any[]) => {
 				let data;
+
+				if (mouseIdleRequireActions.includes(property)) {
+					// 等待鼠标静止/空闲
+					await waitForMouseIdle();
+				}
 
 				if (property === 'click') {
 					if (args[0] instanceof Element) {
@@ -275,4 +315,25 @@ function showMousePointer(el: HTMLElement) {
 			div.remove();
 		}, 500);
 	}, 100);
+}
+
+function waitForMouseIdle(timeout: number = 200): Promise<void> {
+	return new Promise((resolve) => {
+		let timer: any;
+		const default_timer = setTimeout(() => {
+			window.removeEventListener('mousemove', onMouseMove);
+			resolve();
+		}, timeout); // 最多等timeout + 1000ms
+		function onMouseMove() {
+			clearTimeout(default_timer);
+			if (timer) {
+				clearTimeout(timer);
+			}
+			timer = setTimeout(() => {
+				window.removeEventListener('mousemove', onMouseMove);
+				resolve();
+			}, timeout);
+		}
+		window.addEventListener('mousemove', onMouseMove);
+	});
 }

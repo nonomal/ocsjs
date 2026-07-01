@@ -9,12 +9,13 @@ import {
 	AnswerWrapperHandlerConfig
 } from '@ocsjs/core';
 import { $message, h, $gm, $store, Project, Script, $modal, StoreListenerType, $ui } from 'easy-us';
-import type { AnswerMatchMode, AnswererWrapper, SearchInformation } from '@ocsjs/core';
-import { CXProject, ICourseProject, IcveMoocProject, ZHSProject, ZJYProject } from '../index';
+import type { AnswererWrapper, SearchInformation } from '@ocsjs/core';
+import { CXProject, ICourseProject, IcveMoocProject, YKTProject, ZHSProject, ZJYProject } from '../index';
 import { markdown } from '../utils/markdown';
 import { enableCopy } from '../utils';
 import { SearchInfosElement } from '../elements/search.infos';
 import { RenderScript } from '../render';
+import { dropdownStyle } from '../utils/configs';
 
 const TAB_WORK_RESULTS_KEY = 'common.work-results.results';
 
@@ -45,6 +46,9 @@ const state = {
 			'zhs-fusion': (index: number) => {
 				document.querySelectorAll<HTMLElement>('.right-box .list .item').item(index)?.click();
 			},
+			'zhs-hike': (index: number) => {
+				document.querySelectorAll<HTMLElement>('.q_main_right .card_ul .card_li').item(index)?.click();
+			},
 			icve: (index: number) => {
 				document.querySelectorAll<HTMLElement>(`.sheet_nums [id*="sheetSeq"]`).item(index)?.click();
 			},
@@ -72,7 +76,7 @@ const state = {
 /**
  * 题库缓存类型
  */
-type QuestionCache = { title: string; answer: string; from: string; homepage: string };
+type QuestionCache = { title: string; answer: string; from: string; homepage: string; ai?: boolean };
 
 export const CommonProject = Project.create({
 	name: '通用',
@@ -86,16 +90,14 @@ export const CommonProject = Project.create({
 				notes: {
 					defaultValue: $ui.notes([
 						'打开任意网课平台，进入视频、作业页面等待脚本运行，',
-						'任何疑问请查看上方交流群，进群后带截图进行反馈。',
-						'温馨提示: ',
-						'⚠️ 禁止与其他脚本一起使用，否则会不兼容导致无法运行！',
-						'⚠️ 禁止最小化浏览器、切屏，否则可能导致脚本无法运行！'
+						'⚠️ 禁止与其他脚本一起使用（不兼容），也不能开多个相同脚本',
+						'⚠️ 禁止最小化浏览器、切屏，否则可能导致脚本无法运行！',
+						'有疑问请访问下方交流群，进群后带截图进行反馈。'
 					]).outerHTML
 				}
 			},
 			onrender({ panel }) {
 				const guide = createGuide();
-				guide.style.width = '480px';
 				panel.body.replaceChildren(guide);
 			}
 		}),
@@ -129,14 +131,14 @@ export const CommonProject = Project.create({
 					},
 					onload() {
 						const aws: any[] = CommonProject.scripts.settings.cfg.answererWrappers || [];
-						this.value = aws.length ? '当前有' + aws.length + '个可用题库，点击重新配置' : '点击配置';
+						this.value = aws.length ? aws.length + ' 个可用题库（点击进入配置）' : '点击进入配置';
 
 						this.onclick = () => {
 							const aw: any[] = CommonProject.scripts.settings.cfg.answererWrappers || [];
 							const copy = $ui.copy('复制题库配置', JSON.stringify(aw, null, 4));
 
 							const list = h('div', [
-								h('div', aw.length ? ['以下是已经解析过的题库配置：', copy] : ''),
+								h('div', { style: { marginTop: '8px' } }, aw.length ? ['以下是已经解析过的题库配置：', copy] : ''),
 								...createAnswererWrapperList(aw)
 							]);
 							const textarea = h(
@@ -144,7 +146,7 @@ export const CommonProject = Project.create({
 								{
 									className: 'modal-input',
 									style: { minHeight: '250px', width: 'calc(100% - 20px)', maxWidth: '100%' },
-									placeholder: aw.length ? '重新输入题库配置' : '输入你的题库配置...'
+									placeholder: aw.length ? '重新输入题库配置' : '输入你的题库配置...，不会请看上方填写教程'
 								},
 								aw.length === 0 ? '' : JSON.stringify(aw, null, 4)
 							);
@@ -175,30 +177,43 @@ export const CommonProject = Project.create({
 								maskCloseable: false,
 								content: $ui.notes([
 									[
-										h('div', [
-											'题库配置填写教程：',
+										h('div', { style: { fontSize: '16px', marginBottom: '8px' } }, [
+											h('b', '题库配置填写教程👉：'),
 											h('a', { href: 'https://docs.ocsjs.com/docs/work' }, 'https://docs.ocsjs.com/docs/work')
 										])
 									],
 									[
-										h('div', [
-											'⚠️ 如果无法粘贴，请点->：',
-											h('button', '读取剪贴板', (btn) => {
-												btn.classList.add('base-style-button');
-												btn.onclick = () => {
-													navigator.clipboard.readText().then((result) => {
-														textarea.value = result;
-													});
-												};
-											}),
-											'，并同意浏览器上方的剪贴板读取申请。'
-										])
+										h(
+											'div',
+											{
+												className: 'secondary'
+											},
+											[
+												'⚠️ 如果无法粘贴，请点->：',
+												h('button', '读取剪贴板', (btn) => {
+													btn.classList.add('base-style-button');
+													btn.onclick = () => {
+														navigator.clipboard.readText().then((result) => {
+															textarea.value = result;
+														});
+													};
+												}),
+												'，并同意浏览器上方的剪贴板读取申请。'
+											]
+										)
 									],
-									['⚠️ 如果想添加多个不同的题库配置，请在每个配置之间使用三个井号隔开: ###。'],
-									['⚠️ 配置第三方题库出现网页弹窗的，点击永久允许连接。'],
+									[
+										h(
+											'div',
+											{ className: 'secondary' },
+											'⚠️ 如果想添加多个不同的题库配置，请在每个配置之间使用三个井号隔开: ###。'
+										)
+									],
+									[h('div', { className: 'secondary' }, '⚠️ 配置第三方题库出现网页弹窗的，点击永久允许连接。')],
 									...(aw.length ? [list] : [])
 								]),
 								footer: h('div', { style: { width: '100%' } }, [
+									h('div', { className: 'separator secondary' }, '题库配置填写/修改区'),
 									textarea,
 									h('div', { style: { display: 'flex', flexWrap: 'wrap', marginTop: '12px', fontSize: '12px' } }, [
 										h('div', ['解析器：', select], (div) => {
@@ -334,6 +349,18 @@ export const CommonProject = Project.create({
 															return;
 														}
 
+														// 判断题库是否超过限制（10个），如果超过则提示
+														if (awsResult.length > 10) {
+															$modal.alert({
+																content: h('div', [
+																	'题库配置过多可能会导致答题效率降低，建议不超过10个题库，目前解析到' +
+																		awsResult.length +
+																		'个题库，请删除一些不必要的题库后重新配置！'
+																])
+															});
+															return;
+														}
+
 														CommonProject.scripts.settings.cfg.answererWrappers = awsResult;
 														this.value = '当前有' + awsResult.length + '个可用题库';
 														$modal.confirm({
@@ -463,15 +490,14 @@ export const CommonProject = Project.create({
 				'randomWork-choice': {
 					defaultValue: false,
 					label: '(仅超星)随机选择',
-					attrs: { type: 'checkbox', title: '题库搜索不到答案时，随机选择任意一个选项' }
+					attrs: { type: 'checkbox', title: '题库搜索不到答案时，随机选择任意一个选项，仅支持超星章节测试' }
 				},
 				'randomWork-complete': {
 					defaultValue: false,
 					label: '(仅超星)随机填空',
-					attrs: { type: 'checkbox', title: '题库搜索不到答案时，随机填写以下任意一个文案' }
+					attrs: { type: 'checkbox', title: '题库搜索不到答案时，随机填写以下任意一个文案，仅支持超星章节测试' }
 				},
 				'randomWork-completeTexts-textarea': {
-					elementClassName: 'config-details',
 					defaultValue: ['不会', '不知道', '不清楚', '不懂', '不会写'].join('\n'),
 					label: '(仅超星)随机填空文案',
 					tag: 'textarea',
@@ -486,11 +512,24 @@ export const CommonProject = Project.create({
 					}
 				},
 				advancedSettings: {
+					...dropdownStyle,
 					defaultValue: false,
 					label: '高级设置',
 					attrs: { type: 'checkbox', title: '请谨慎使用高级设置，可能会影响答题效果，小白在未理解的情况下谨慎调整。' }
 				},
-
+				answerWrapperHandlerTimeout: {
+					showIf: 'common.settings.advancedSettings',
+					elementClassName: 'config-details',
+					label: '搜题最大耗时（秒）',
+					attrs: {
+						type: 'number',
+						min: 10,
+						step: 1,
+						max: 3 * 60,
+						title: '搜题超时时间，单位为秒，超过这个时间直接放弃，进行下一题搜索。'
+					},
+					defaultValue: 120
+				},
 				stopSecondWhenFinish: {
 					showIf: 'common.settings.advancedSettings',
 					elementClassName: 'config-details',
@@ -532,30 +571,6 @@ export const CommonProject = Project.create({
 							}
 						});
 					}
-				},
-				answerMatchMode: {
-					showIf: 'common.settings.advancedSettings',
-					elementClassName: 'config-details',
-					label: '答案匹配模式',
-					tag: 'select',
-					defaultValue: 'similar' as AnswerMatchMode,
-					options: [
-						['similar', '相似匹配', '答案相似度达到60%以上就匹配'],
-						['exact', '精确匹配', '答案必须完全一致才匹配']
-					]
-				},
-				answerWrapperHandlerTimeout: {
-					showIf: 'common.settings.advancedSettings',
-					elementClassName: 'config-details',
-					label: '搜题最大耗时（秒）',
-					attrs: {
-						type: 'number',
-						min: 10,
-						step: 1,
-						max: 3 * 60,
-						title: '搜题超时时间，单位为秒，超过这个时间直接放弃，进行下一题搜索。'
-					},
-					defaultValue: 120
 				},
 				redundanceWordsText: {
 					showIf: 'common.settings.advancedSettings',
@@ -720,18 +735,33 @@ export const CommonProject = Project.create({
 						{ className: 'base-style-button', disabled: this.cfg.answererWrappers.length === 0 },
 						'🔄️刷新题库状态'
 					);
+					const errorSolveGuide = h(
+						'button',
+						{
+							className: 'base-style-button ',
+							style: { display: 'none' },
+							onclick() {
+								window.open('https://docs.ocsjs.com/docs/other/FQA#tk-error', '_blank');
+							}
+						},
+						'📖连接失败如何解决？'
+					);
 					refresh.onclick = () => {
 						updateState();
 					};
 					const tableContainer = h('div');
 					refresh.style.display = 'none';
 					tableContainer.style.display = 'none';
-					panel.body.append(h('div', { style: { display: 'flex' } }, [testNotification, refresh]), tableContainer);
+					panel.body.append(
+						h('div', { style: { display: 'flex' } }, [testNotification, refresh, errorSolveGuide]),
+						tableContainer
+					);
 
 					// 更新题库状态
 					const updateState = async () => {
 						// 清空元素
 						tableContainer.replaceChildren();
+						errorSolveGuide.style.display = 'none';
 						let loadedCount = 0;
 
 						if (this.cfg.answererWrappers.length) {
@@ -772,6 +802,10 @@ export const CommonProject = Project.create({
 									success = true;
 								} else {
 									success = false;
+								}
+
+								if (error) {
+									errorSolveGuide.style.display = 'block';
 								}
 
 								const body = h('tbody');
@@ -1158,24 +1192,8 @@ export const CommonProject = Project.create({
 						/** 渲染结果列表 */
 						const createResult = (result: SimplifyWorkResult | undefined) => {
 							if (result) {
-								let info: HTMLElement | null = null;
-
-								if (result.requested === false && result.resolved === false) {
-									info = h('div', { className: 'result-info unresolved' }, '等待搜索中... 🔍');
-								} else if (result.error) {
-									info = h('div', { className: 'result-info error' }, '❌ ' + result.error);
-								} else if (result.searchInfos.length === 0) {
-									info = h('div', { className: 'result-info no-answer' }, '❌ 题库没搜索到答案');
-								} else {
-									info = result.finish
-										? null
-										: result.resolved === false
-										? h('div', { className: 'result-info unresolved' }, '等待顺序答题中... ⏱️')
-										: h('div', { className: 'result-info error' }, '❌ 此题未完成, 可能是没有匹配的选项。');
-								}
-
 								return h('div', [
-									h('div', { className: 'alert-info-wrapper' }, [info ?? h('div')]),
+									createSearchResultAlertElement(result),
 									h(SearchInfosElement, {
 										infos: result.searchInfos,
 										question: result.question,
@@ -1279,7 +1297,8 @@ export const CommonProject = Project.create({
 												(res) => [res.question, res.answer, res.extra_data] as [string, string, object]
 											),
 											homepage: info.homepage,
-											name: info.name
+											name: info.name,
+											error: info.error
 										})),
 										question: value
 									})
@@ -1421,9 +1440,9 @@ export const CommonProject = Project.create({
 						for (const cache of caches) {
 							if (cache.title.trim() === title.trim()) {
 								results.push({
-									name: `【题库缓存】${cache.from}`,
+									name: cache.from,
 									homepage: cache.homepage,
-									results: [{ answer: cache.answer, question: cache.title }]
+									results: [{ answer: cache.answer, question: cache.title, extra_data: { ai: cache.ai, cache: true } }]
 								});
 							}
 						}
@@ -1503,6 +1522,8 @@ export const CommonProject = Project.create({
 							)
 						);
 
+						const countEl = h('span', ['当前缓存数量：' + questionCaches.length]);
+
 						$modal.simple({
 							width: 800,
 							content: h('div', [
@@ -1515,10 +1536,11 @@ export const CommonProject = Project.create({
 								h('div', { className: 'card' }, [
 									$ui.space(
 										[
-											h('span', ['当前缓存数量：' + questionCaches.length]),
+											countEl,
 											$ui.button('清空题库缓存', {}, (btn) => {
 												btn.onclick = () => {
 													this.cfg.localQuestionCaches = [];
+													countEl.innerText = '当前缓存数量：0';
 													list.forEach((el) => el.remove());
 												};
 											})
@@ -1760,6 +1782,10 @@ const createGuide = () => {
 	const changeLog = h('button', { className: 'base-style-button-secondary' }, '📄更新日志');
 	changeLog.onclick = () => CommonProject.scripts.apps.methods.showChangelog();
 
+	const closeGuide = h('button', { className: 'base-style-button-secondary' }, '📄如何关闭脚本？');
+	closeGuide.onclick = () =>
+		window.open('https://docs.ocsjs.com/docs/script#%E5%85%B3%E9%97%AD%E8%84%9A%E6%9C%AC%E6%95%99%E7%A8%8B', '_blank');
+
 	const cardStyle: Partial<CSSStyleDeclaration> = {
 		border: '1px solid #eee',
 		borderRadius: '4px',
@@ -1775,7 +1801,7 @@ const createGuide = () => {
 			]),
 
 			h('div', [
-				...[CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject].map((project) => {
+				...[CXProject, ZHSProject, ZJYProject, IcveMoocProject, ICourseProject, YKTProject].map((project) => {
 					const btn = h('button', { className: 'base-style-button-secondary', style: { margin: '4px' } }, [
 						project.name
 					]);
@@ -1790,7 +1816,39 @@ const createGuide = () => {
 			h('div', { style: { marginBottom: '8px', fontWeight: 'bold' } }, '🌐快捷访问：'),
 			gotoHome,
 			contactUs,
-			changeLog
+			changeLog,
+			closeGuide
 		])
 	]);
 };
+
+function createSearchResultAlertElement(result: SimplifyWorkResult) {
+	let info: HTMLElement | null = null;
+	let err = result.error || result.searchInfos.find((i) => i.error)?.error;
+	if (result.requested === false && result.resolved === false) {
+		info = h('div', { className: 'result-info unresolved' }, '等待搜索中... 🔍');
+	} else if (err) {
+		let href = '#';
+		if (err?.includes('is not valid JSON')) {
+			err = '题库返回数据错误';
+			href = 'https://docs.ocsjs.com/docs/other/FQA#tk-data-error';
+		} else if (err?.includes('题库连接失败')) {
+			err = '题库连接失败';
+			href = 'https://docs.ocsjs.com/docs/other/FQA#tk-error';
+		}
+		info = h('div', { className: 'result-info error' }, [
+			'❌ ' + err,
+			h('a', { href, target: '_blank', style: { marginLeft: '3px' } }, '解决方法?')
+		]);
+	} else if (result.searchInfos.length === 0) {
+		info = h('div', { className: 'result-info no-answer' }, '❌ 题库没搜索到答案');
+	} else {
+		info = result.finish
+			? null
+			: result.resolved === false
+			? h('div', { className: 'result-info unresolved' }, '等待顺序答题中... ⏱️')
+			: h('div', { className: 'result-info error' }, '❌ 此题未完成, 可能是没有匹配的选项。');
+	}
+
+	return h('div', { className: 'alert-info-wrapper' }, [info ?? h('div')]);
+}

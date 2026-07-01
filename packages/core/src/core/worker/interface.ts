@@ -3,12 +3,18 @@ import { SearchInformation } from '../answer-wrapper/interface';
 export type ElementResolver<R> = (root: HTMLElement | Document) => R;
 export type RawElements = Record<
 	string | symbol,
-	string | ElementResolver<HTMLElement[]> | ElementResolver<HTMLElement>[]
+	string | ElementResolver<(HTMLElement | null | undefined)[]> | ElementResolver<HTMLElement | null | undefined>[]
 > & {
 	/** 题目元素选择器 */
-	title?: string | ElementResolver<HTMLElement[]> | ElementResolver<HTMLElement>[];
+	title?:
+		| string
+		| ElementResolver<(HTMLElement | null | undefined)[]>
+		| ElementResolver<HTMLElement | null | undefined>[];
 	/** 题目选项的元素选择器 */
-	options?: string | ElementResolver<HTMLElement[]> | ElementResolver<HTMLElement>[];
+	options?:
+		| string
+		| ElementResolver<(HTMLElement | null | undefined)[]>
+		| ElementResolver<HTMLElement | null | undefined>[];
 };
 
 export type SearchedElements<E, T> = Record<keyof E, T> & {
@@ -31,12 +37,6 @@ export interface WorkContext<E> {
 	type: QuestionTypes;
 	/** 答案分隔符 */
 	answerSeparators?: string[];
-	/**
-	 * 答案匹配模式
-	 * exact : 精准匹配模式, 只有答案相同才匹配
-	 * similar : 相似匹配, 只要答案相似就匹配
-	 */
-	answerMatchMode: AnswerMatchMode;
 }
 
 /** 答案题目处理器结果 */
@@ -193,7 +193,7 @@ export type AnswererType<E> = (
 /**
  * 答题器参数
  */
-export type WorkOptions<E extends RawElements> = {
+export interface WorkOptions<E extends RawElements> {
 	/** 父元素 */
 	root: string | HTMLElement[];
 	/** dom元素解析器，可以在 WorkContext.elements 中使用解析后的元素 */
@@ -206,8 +206,6 @@ export type WorkOptions<E extends RawElements> = {
 	thread?: number;
 	/** 分隔符 */
 	answerSeparators?: string[];
-	/** 答案匹配模式 */
-	answerMatchMode?: AnswerMatchMode;
 	/** 当元素被搜索到 */
 	onElementSearched?: (elements: SearchedElements<E, HTMLElement[]>, root: HTMLElement) => void | Promise<void>;
 	/** 监听搜题结果 */
@@ -218,6 +216,33 @@ export type WorkOptions<E extends RawElements> = {
 	) => void | Promise<void>;
 	/** 监听答题结果 */
 	onResultsUpdate?: (currentResult: WorkResult<E>, currentIndex: number, res: WorkResult<E>[]) => void | Promise<void>;
-};
+}
+
+export interface CustomWorkOptions {
+	period: number;
+	questions: () => { text: string; type: QuestionTypes }[] | Promise<{ text: string; type: QuestionTypes }[]>;
+	answerer: (question: string) => SearchInformation[] | Promise<SearchInformation[]>;
+	resolver: (searchInfos: SearchInformation[]) => ResolverResult | Promise<ResolverResult>;
+
+	/** 监听答题结果 */
+	onResultsUpdate?: (
+		currentResult: SimplifyWorkResult,
+		currentIndex: number,
+		res: SimplifyWorkResult[]
+	) => void | Promise<void>;
+}
 
 export type WorkUploadType = 'save' | 'nomove' | 'force' | number;
+
+export type WorkerEvents = {
+	/** 答题开始 */
+	start: () => void;
+	/** 答题结果 */
+	done: () => void;
+	/** 关闭答题 */
+	close: () => void;
+	/** 暂停答题 */
+	stop: () => void;
+	/** 继续答题 */
+	continuate: () => void;
+};

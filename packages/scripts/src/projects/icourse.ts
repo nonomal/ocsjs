@@ -5,8 +5,8 @@ import { CommonProject } from './common';
 import { commonWork, optimizationElementWithImage, removeRedundantWords, simplifyWorkResult } from '../utils/work';
 import { $console, BackgroundProject } from './background';
 import { $playwright } from '../utils/app';
-import { waitForElement, waitForMedia } from '../utils/study';
-import { playbackRate, volume, workNotes } from '../utils/configs';
+import { waitForElement, waitForMedia, waitFor } from '../utils/study';
+import { playbackRate, volume } from '../utils/configs';
 import { $render } from '../utils/render';
 
 const $msg_and_log = (type: 'info' | 'warn' | 'error', msg: string) => {
@@ -17,7 +17,8 @@ const $msg_and_log = (type: 'info' | 'warn' | 'error', msg: string) => {
 const state = {
 	currentMedia: undefined as HTMLMediaElement | undefined,
 	currentUrlHash: '',
-	currentRunningScriptName: ''
+	currentRunningScriptName: '',
+	current_job_id: ''
 };
 
 export const ICourseProject = Project.create({
@@ -45,8 +46,12 @@ export const ICourseProject = Project.create({
 							if (runAtHash.length && runAtHash.some((h) => state.currentUrlHash.includes(h))) {
 								if (state.currentRunningScriptName !== script.name) {
 									state.currentRunningScriptName = script.name;
-									script.methods?.main?.(() => {
-										return state.currentUrlHash && runAtHash.some((h) => state.currentUrlHash.includes(h));
+									state.current_job_id = Math.random().toString(16).slice(2);
+									script.methods?.main?.({
+										canRun: () => {
+											return state.currentUrlHash && runAtHash.some((h) => state.currentUrlHash.includes(h));
+										},
+										job_id: state.current_job_id
 									});
 								}
 								break;
@@ -134,7 +139,7 @@ export const ICourseProject = Project.create({
 			},
 			methods() {
 				return {
-					main: async (canRun: () => boolean) => {
+					main: async ({ canRun, job_id }: { canRun: () => boolean; job_id: string }) => {
 						CommonProject.scripts.render.methods.pin(this);
 
 						const remotePage = await BackgroundProject.scripts.dev.methods.getRemotePlaywrightCurrentPage();
@@ -150,9 +155,11 @@ export const ICourseProject = Project.create({
 						 * 处理视频弹窗题目
 						 */
 						const handleVideoTest = async () => {
+							if (!canRun() || job_id !== state.current_job_id) return;
 							setTimeout(async () => {
 								const question = document.querySelector('.u-questionItem');
-								if (question) {
+								const media = document.querySelector('video,audio');
+								if (question && media) {
 									$msg_and_log('info', '检测到视频弹窗测验，开始答题');
 									await new Promise<void>((resolve) => {
 										ICourseProject.scripts.work.methods.start('chapter-test', canRun, (worker) => {
@@ -352,7 +359,17 @@ export const ICourseProject = Project.create({
 				['考试页面', 'icourse163.org/mooc/main/newExam']
 			],
 			configs: {
-				notes: workNotes,
+				notes: {
+					defaultValue: $ui.notes([
+						'自动答题前请在 “通用-全局设置” 中设置题库配置。',
+						'⚠️禁止同时开多个作业/考试页面。',
+						[
+							'⚠️由于MOOC限制、答题速度和搜题速度将默认调慢',
+							' 防止出现网络并发，导致无法选上选项的问题。',
+							' 答题和搜题过慢是正常情况。'
+						]
+					]).outerHTML
+				},
 				runAtHash: {
 					defaultValue: ['/learn/quiz', '/learn/examObject']
 				}
@@ -361,7 +378,7 @@ export const ICourseProject = Project.create({
 				const start = async (
 					type: 'chapter-test' | 'work' | 'exam',
 					canRun: () => boolean,
-					onWorkerCreated?: (worker: OCSWorker) => void
+					onWorkerCreated?: (worker: any) => void
 				) => {
 					// 检查是否为软件环境
 					const remotePage = await BackgroundProject.scripts.dev.methods.getRemotePlaywrightCurrentPage();
@@ -399,7 +416,7 @@ export const ICourseProject = Project.create({
 					});
 				};
 				return {
-					main: async (canRun: () => boolean) => {
+					main: async ({ canRun }: { canRun: () => boolean; job_id: string }) => {
 						if (location.hash.includes('learn/quizscore')) {
 							$message.success('当前作业已完成，自动答题关闭。');
 							return;
@@ -411,7 +428,32 @@ export const ICourseProject = Project.create({
 			},
 			// 考试是新开一个界面所以会直接触发
 			oncomplete() {
-				this.methods.start('exam', () => true);
+				if (
+					(location.href.includes('/learn/examObject') &&
+						// 考试成绩解析页面
+						!location.href.includes('learn/examObjectScore')) ||
+					// 新版考试界面
+					location.href.includes('/mooc/main/newExam')
+				) {
+					this.methods.start('exam', () => true);
+				}
+			}
+		}),
+		passportRedirect: new Script({
+			name: '登录重定向修复',
+			matches: [['登录重定向', 'passport/logingate/changeCookie.htm']],
+			configs: {
+				notes: {
+					defaultValue: $ui.notes(['检测到页面重定向到空白页面', '程序将会自动修复']).outerHTML
+				}
+			},
+			hideInPanel: true,
+			oncomplete(...args) {
+				CommonProject.scripts.render.methods.pin(this);
+				$message.info('检测到中国大学MOOC空白页面，即将重定向修复...');
+				setTimeout(() => {
+					location.href = 'https://www.icourse163.org/';
+				}, 3000);
 			}
 		})
 	}
@@ -429,18 +471,9 @@ function waitForQuestion() {
 }
 
 function workAndExam(
-	remotePage: RemotePage,
+	rp: RemotePage,
 	type: 'chapter-test' | 'work' | 'exam',
-	{
-		answererWrappers,
-		period,
-		thread,
-		redundanceWordsText,
-		upload,
-		stopSecondWhenFinish,
-		answerSeparators,
-		answerMatchMode
-	}: CommonWorkOptions
+	{ answererWrappers, redundanceWordsText, upload, stopSecondWhenFinish, answerSeparators }: CommonWorkOptions
 ) {
 	CommonProject.scripts.workResults.methods.init({
 		questionPositionSyncHandlerType: 'icourse'
@@ -449,7 +482,15 @@ function workAndExam(
 	const titleTransform = (titles: (HTMLElement | undefined)[]) => {
 		return removeRedundantWords(
 			titles
-				.map((t) => (t ? optimizationElementWithImage(t, true).innerText : ''))
+				.filter((t) => t?.innerText || t?.querySelector('img'))
+				.map((t) => {
+					if (t) {
+						const el = optimizationElementWithImage(t, true);
+						// textContent can still read the hidden image URL placeholders.
+						return (el.textContent || '').replace(/\s+/g, ' ').trim() || '';
+					}
+					return '';
+				})
 				.filter((t) => t.trim() !== '')
 				.join(',')
 				// /\u200B/g 排除不可见的空格
@@ -466,19 +507,18 @@ function workAndExam(
 			title: type === 'exam' ? '[class*=questionInfo]' : '.j-title .j-richTxt',
 			options: type === 'exam' ? '[class*=index-module__optionBody]' : '.choices li,.inputArea'
 		},
-		thread: thread ?? 1,
+		thread: 1,
 		answerSeparators: answerSeparators.split(',').map((s) => s.trim()),
-		answerMatchMode: answerMatchMode,
 		/** 默认搜题方法构造器 */
 		answerer: (elements, ctx) => {
 			const title = titleTransform(elements.title);
 			if (title) {
 				return CommonProject.scripts.apps.methods.searchAnswerInCaches(title, async () => {
-					await $.sleep((period ?? 3) * 1000);
+					await $.sleep(5 * 1000);
 					return defaultAnswerWrapperHandler(answererWrappers, {
 						type: ctx.type || 'unknown',
 						title,
-						options: ctx.elements.options.map((o) => o.innerText).join('\n')
+						options: ctx.elements.options.map((o) => optimizationElementWithImage(o, true).innerText).join('\n')
 					});
 				});
 			} else {
@@ -492,28 +532,36 @@ function workAndExam(
 					if (work_type === 'exam') {
 						const input = option.querySelector('input');
 						if (input && !input?.checked) {
-							await $.sleep(200);
-							return input.click();
+							return await networkIdleRequire(rp, async () => {
+								await $.sleep(1000);
+								return input.click();
+							});
 						}
 					}
 					const text = option.querySelector('.f-richEditorText');
 					const input = option.querySelector('input');
 					if (input && !input?.checked && text) {
-						await $.sleep(200);
-						await remotePage.click(text);
+						await networkIdleRequire(rp, async () => {
+							await $.sleep(1000);
+							await rp.click(text);
+						});
 					}
 				} else if (type === 'completion' && answer.trim()) {
-					const text = option.querySelector('textarea');
-
-					if (text) {
-						text.value = answer.trim();
-						await remotePage.fill('textarea', answer.trim());
+					const textarea = option.querySelector('textarea');
+					const id = textarea?.getAttribute('id')?.toString() || '';
+					if (id && textarea?.value.trim() !== answer.trim()) {
+						await networkIdleRequire(rp, async () => {
+							await $.sleep(1000);
+							await rp.click('#' + id);
+							await rp.fill('#' + id, answer.trim());
+						});
 					}
 				}
 			}
 		},
 		onElementSearched(elements, root) {
 			elements.options.forEach((el) => {
+				optimizationElementWithImage(el);
 				const correct = el.querySelector<HTMLElement>('.u-icon-correct');
 				const wrong = el.querySelector<HTMLElement>('.u-icon-wrong');
 				if (correct) {
@@ -536,7 +584,7 @@ function workAndExam(
 	});
 
 	worker
-		.doWork({ enable_debug: true })
+		.doWork({ enable_debug: BackgroundProject.scripts.dev.cfg.enable_answerer_debug })
 		.then(async (results) => {
 			if (worker.isClose) {
 				return;
@@ -563,9 +611,13 @@ function workAndExam(
 							return;
 						}
 						if (uploadable) {
+							// 先收起面板防止阻挡，元素无法通过移动脚本面板去点击
+							CommonProject.scripts.render.methods.minimize();
+							CommonProject.scripts.render.methods.setPosition(100, 200);
+
 							const sumbit = document.querySelector('.j-submit');
 							if (sumbit) {
-								await remotePage.click(sumbit);
+								await rp.click(sumbit);
 							} else {
 								$msg_and_log('warn', '没有找到提交按钮，将跳过提交。');
 							}
@@ -693,5 +745,25 @@ async function discussion(
 		await $.sleep(2000);
 	} else {
 		$msg_and_log('error', '获取评论输入框失败！');
+	}
+}
+
+/**
+ * 执行回调，并且检测是否触发并发限制
+ * 如果限制，等待一段时间后重新执行回调
+ */
+async function networkIdleRequire(rp: RemotePage, cb: () => void | Promise<void>) {
+	await cb();
+	// ux-modal  ux-modal-fadeIn
+	const modal = await waitFor(() => document.querySelector('.ux-modal_content_content'), {
+		check_period_ms: 200,
+		timeout_seconds: 1
+	});
+	if (modal) {
+		const msg = $message.warn('答题速度过快导致并发限制、3秒后再继续答题。');
+		await rp.click('.ux-modal-btn');
+		await $.sleep(3000);
+		await cb();
+		msg?.remove();
 	}
 }

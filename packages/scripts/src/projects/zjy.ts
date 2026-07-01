@@ -2,8 +2,8 @@ import { $, OCSWorker, defaultAnswerWrapperHandler } from '@ocsjs/core';
 import { Project, Script, $ui, $el, $message, $modal, h } from 'easy-us';
 import { volume } from '../utils/configs';
 import { waitForMedia, waitForElement } from '../utils/study';
-import { CommonWorkOptions, playMedia } from '../utils';
-import { $console } from './background';
+import { $msg, CommonWorkOptions, playMedia } from '../utils';
+import { $console, BackgroundProject } from './background';
 import { CommonProject } from './common';
 import { commonWork, simplifyWorkResult } from '../utils/work';
 
@@ -26,6 +26,8 @@ const work_pages: [string, string][] = [
 	['资源库keep作业页面', 'study/spockeepTest'],
 	['资源库job作业页面', 'study/spocjobTest'],
 	['资源库考试', 'study/spoctest'],
+	['课堂测试作业界面', 'study/courseteaching/test/homeWork'],
+
 	['作业页面', 'icve-study/coursePreview/jobTes'],
 	['考试页面', 'icve-study/coursePreview/test'],
 	['考试页面', 'icve-study/test'],
@@ -37,7 +39,8 @@ const isWork = () => {
 		window.location.href.includes('icve-study/coursePreview/jobTes') ||
 		window.location.href.includes('icve-study/coursePreview/keepTest') ||
 		window.location.href.includes('study/spockeepTest') ||
-		window.location.href.includes('study/spocjobTest')
+		window.location.href.includes('study/spocjobTest') ||
+		window.location.href.includes('study/courseteaching/test/homeWork')
 	);
 };
 const isExam = () => {
@@ -76,6 +79,22 @@ export const ZJYProject = Project.create({
 				}
 			}
 		}),
+		v2: new Script({
+			name: '旧版切换器',
+			matches: [['新版智慧职教', 'zjy2.icve.com.cn/study/v2/']],
+			hideInPanel: true,
+			oncomplete() {
+				$msg.info('脚本只支持旧版职教云，即将跳转到旧版职教云页面...');
+				$modal.alert({
+					title: '提示',
+					content: '脚本只支持旧版职教云，即将跳转到<b>旧版</b>职教云页面...',
+					maskCloseable: false
+				});
+				setTimeout(() => {
+					location.href = '/study/index';
+				}, 5000);
+			}
+		}),
 		dispatcher: new Script({
 			name: '调度器',
 			matches: [
@@ -85,7 +104,8 @@ export const ZJYProject = Project.create({
 				 * 这个页面需要手动选择时间查找并进入，课程里面无连串课程查找，只能在当前页面整理
 				 */
 				['内容资源页面', 'zjy2.icve.com.cn/study/studentFast/classroomNow'],
-				['在线课堂学习页面', 'zjy2.icve.com.cn/study/studentFast/courseware']
+				['在线课堂学习页面', 'zjy2.icve.com.cn/study/studentFast/courseware'],
+				['课堂作业测试界面', 'zjy2.icve.com.cn/study/courseteaching/test/homeWork']
 			],
 			hideInPanel: true,
 			methods() {
@@ -238,21 +258,45 @@ export const ZJYProject = Project.create({
 						}
 
 						const courseInfo = ZJYProject.scripts.study.cfg.courseList.find((i) => i.id === id);
-
 						if (!courseInfo) {
-							const err = '获取课程信息失败，请手动刷新页面';
-							$message.error({ content: err, duration: 0 });
+							const btn = h('button', { className: 'base-style-button' }, '修复数据');
+							btn.onclick = async () => {
+								const courseId = getUniqueCourseId();
+								if (!courseId) {
+									$message.error({ content: '获取课程数据失败！' });
+									return;
+								}
+								const courseData = await getCourseData();
+								if (!courseData) {
+									return;
+								}
+								ZJYProject.scripts.study.cfg.currentCourseId = courseId;
+								ZJYProject.scripts.study.cfg.courseList = courseData;
+								$modal.simple({
+									title: '提示',
+									content: '数据已修复完毕，请刷新页面重新尝试运行。'
+								});
+							};
+							const err = '获取课程信息失败，请手动刷新页面，或者尝试修复数据：';
+							$message.error({ content: h('span', [err, btn]), duration: 0 });
 							$console.error(err);
 							return;
 						}
 
+						/**
+						 * courseType 在类型为文件夹+附件形式（附件为视频）时，显示混乱类型比如：courseType: 知识点讲解
+						 * 此时从页面获取的 curType 反而是正确的 video 类型
+						 */
+						const vue = getVueBindElement();
+						const courseType = vue.curType === 'video' ? 'video' : courseInfo?.fileType || '';
+
 						const started_url = window.location.href;
-						let msg = '开始学习：' + courseInfo.fileType + '-' + courseInfo.name;
+						let msg = '开始学习：' + courseType + '-' + courseInfo.name;
 						$message.success(msg);
 						$console.info(msg);
-						if (['ppt', 'doc', 'pptx', 'docx', 'pdf', 'txt', 'ppt文档'].some((i) => courseInfo.fileType === i)) {
+						if (['ppt', 'doc', 'pptx', 'docx', 'pdf', 'txt', 'ppt文档', 'xls', 'xlsx'].some((i) => courseType === i)) {
 							await watchFile(this.cfg.pptReadPeriod);
-						} else if (['video', 'audio', 'mp4', 'mp3', 'flv', '视频'].some((i) => courseInfo.fileType === i)) {
+						} else if (['video', 'audio', 'mp4', 'mp3', 'flv', 'wav', '视频'].some((i) => courseType === i)) {
 							const text = $el('.guide')?.textContent || '';
 							msg = `任务点 ${courseInfo.name}，不支持播放。`;
 							if (text.includes('很抱歉，您的浏览器不支持播放此类文件') || text.includes('此视频暂无法播放')) {
@@ -262,21 +306,21 @@ export const ZJYProject = Project.create({
 							} else {
 								await watchMedia();
 							}
-						} else if (['png', 'jpg', '图片'].some((i) => courseInfo.fileType === i)) {
+						} else if (['png', 'jpg', '图片'].some((i) => courseType === i)) {
 							msg = `已查看图片任务点 ${courseInfo.name}，即将跳过。`;
 							$message.info(msg);
 							$console.info(msg);
 						} else {
-							msg = `未知的任务点 ${courseInfo.name}，类型 ${courseInfo.fileType}，请跟作者进行反馈。`;
+							msg = `未知的任务点 ${courseInfo.name}，类型 ${courseType}，请跟作者进行反馈。`;
 							$message.error(msg);
 							$console.error(msg);
 						}
 						if (started_url === window.location.href) {
-							msg = courseInfo.name + ' 任务点结束，三秒后下一章';
+							msg = '任务点结束，五秒后下一章';
 							$message.warn('如果职教云一直卡在显示：“资源类型无法学习，请核对数据！” 请手动切换下一章。');
 							$message.info(msg);
 							$console.info(msg);
-							await $.sleep(3000);
+							await $.sleep(5000);
 							await next(type);
 						}
 					}
@@ -343,7 +387,7 @@ async function watchMedia() {
 }
 
 async function watchFile(pptReadPeriod: number) {
-	const vue = getVueBindElement();
+	const vue = getPPTVueBindElement();
 	if (!vue) {
 		return;
 	}
@@ -364,7 +408,6 @@ async function watchFile(pptReadPeriod: number) {
 		if (current >= total) {
 			break;
 		}
-		await $.sleep(pptReadPeriod * 1000);
 		// 旧版PPT任务，新版使用 skip
 		try {
 			vue.next && vue.next();
@@ -372,6 +415,8 @@ async function watchFile(pptReadPeriod: number) {
 		try {
 			vue.skip && vue.skip();
 		} catch {}
+
+		await $.sleep(pptReadPeriod * 1000);
 	}
 }
 
@@ -388,6 +433,10 @@ function isZyk() {
 }
 
 function getVueBindElement() {
+	return $el('.guide')?.__vue__ || $el('.teach')?.__vue__;
+}
+
+function getPPTVueBindElement() {
 	/**
 	 * 2025/11月新PPT，使用 FilePreview 获取
 	 */
@@ -403,16 +452,15 @@ async function next(type: 'classroomNow' | 'normal') {
 	const id = new URL(window.location.href).searchParams.get(field);
 	let nextObject: CourseType | undefined;
 	const data = ZJYProject.scripts.study.cfg.courseList;
-	for (let index = 0; index < data.length; index++) {
+	const start_index = data.findIndex((i) => i.id === id);
+	for (let index = start_index + 1; index < data.length; index++) {
 		const item = data[index];
 		// 跳过讨论
 		if (['测验', '讨论'].some((i) => item.fileType === i)) {
 			continue;
 		}
-		if (item.id === id) {
-			nextObject = data[index + 1];
-			break;
-		}
+		nextObject = item;
+		break;
 	}
 
 	if (id && nextObject) {
@@ -428,7 +476,9 @@ async function next(type: 'classroomNow' | 'normal') {
 
 		await $.sleep(3000);
 		const url = new URL(window.location.href);
-		url.searchParams.set('courseDesignId', nextObject.courseDesignId);
+		if (nextObject.courseDesignId) {
+			url.searchParams.set('courseDesignId', nextObject.courseDesignId);
+		}
 		url.searchParams.set(field, nextObject.id);
 		window.location.replace(url.href);
 	} else {
@@ -580,13 +630,17 @@ function waitForLoad() {
  * 等待试卷作业加载
  */
 async function waitForQuestions() {
-	return waitForElement('.subjectList');
+	return waitForElement(
+		[
+			// 一般选择器
+			'.subjectList',
+			// 课堂作业（study/courseteaching/test/homeWork）的特殊选择器
+			'.subjectListTest'
+		].join(',')
+	);
 }
 
-function workOrExam(
-	type: 'work' | 'exam',
-	{ answererWrappers, period, thread, answerSeparators, answerMatchMode }: CommonWorkOptions
-) {
+function workOrExam(type: 'work' | 'exam', { answererWrappers, period, thread, answerSeparators }: CommonWorkOptions) {
 	$message.info({ content: '开始作业' });
 	CommonProject.scripts.workResults.methods.init({
 		questionPositionSyncHandlerType: 'zjy'
@@ -607,7 +661,6 @@ function workOrExam(
 		},
 		thread: thread ?? 1,
 		answerSeparators: answerSeparators.split(',').map((s) => s.trim()),
-		answerMatchMode: answerMatchMode,
 		/** 默认搜题方法构造器 */
 		answerer: (elements, ctx) => {
 			const title = titleTransform(elements.title);
@@ -677,7 +730,7 @@ function workOrExam(
 	});
 
 	worker
-		.doWork({ enable_debug: true })
+		.doWork({ enable_debug: BackgroundProject.scripts.dev.cfg.enable_answerer_debug })
 		.then(() => {
 			$message.info({ content: '作业/考试完成，请自行检查后保存或提交。', duration: 0 });
 			worker.emit('done');
